@@ -398,32 +398,16 @@ class FirestoreService:
             ) from exc
 
     def list_assets(self) -> list[Asset]:
+        # Asset documents already include assignment fields.
+        # Avoid reading ASSIGNMENTS collection on every asset list request.
         assets = self._list_assets_raw()
-        active_assignments = {
-            item.asset_id: item for item in self._list_assignments_raw(active_only=True)
-        }
-        for asset in assets:
-            current_assignment = active_assignments.get(asset.id)
-            if current_assignment:
-                asset.assigned_to = current_assignment.personnel_name
-                asset.assigned_department = current_assignment.department
-                asset.assignment_id = current_assignment.id
         return sorted(assets, key=lambda item: (item.name.lower(), item.asset_id.lower()))
 
     def get_asset(self, asset_id: str) -> Asset:
         doc = self.db.collection(ASSETS).document(asset_id).get()
         if not doc.exists:
             raise KeyError("Asset not found.")
-        asset = document_to_asset(doc)
-        current_assignment = next(
-            (item for item in self._list_assignments_raw(active_only=True) if item.asset_id == asset.id),
-            None,
-        )
-        if current_assignment:
-            asset.assigned_to = current_assignment.personnel_name
-            asset.assigned_department = current_assignment.department
-            asset.assignment_id = current_assignment.id
-        return asset
+        return document_to_asset(doc)
 
     def create_asset(self, payload: AssetCreate, user_email: str) -> Asset:
         doc_ref = self.db.collection(ASSETS).document(payload.asset_id)
@@ -756,11 +740,13 @@ class FirestoreService:
             assignment_counts = Counter()
             warnings.append(
                 "Firestore okuma kotasi sinirda oldugu icin hizli import modu kullanildi. "
-                "Zimmet kayitlari assignment tablosuna tam senkronize edilemeyebilir."
+                "Demirbas ve zimmet adlari kaydedildi; assignment detaylari kotasi normale donunce tam senkronize edilir."
             )
         touched_personnel_ids: set[str] = set()
         assignment_sync_rows: dict[str, tuple[str, str, datetime]] = {}
         assignment_clear_rows: set[str] = set()
+        location_override_count = 0
+        location_examples: list[str] = []
 
         for index, raw_row in frame.iterrows():
             row = raw_row.to_dict()
@@ -774,9 +760,9 @@ class FirestoreService:
 
             location = clean_optional(row.get("lokasyon")) or "Genel Merkez"
             if normalize_text(location) not in {"genel_merkez", "merkez", "genel_merkez_lokasyon"}:
-                warnings.append(
-                    f"Satir {index + 2}: Lokasyon '{location}' olarak geldi, kurala uygun sekilde 'Genel Merkez' kullanildi."
-                )
+                location_override_count += 1
+                if len(location_examples) < 3 and location not in location_examples:
+                    location_examples.append(location)
 
             added_at = (
                 parse_datetime(row.get("eklenme_tarihi"))
@@ -848,6 +834,17 @@ class FirestoreService:
             ):
                 assignment_clear_rows.add(asset_id)
                 assignment_sync_rows.pop(asset_id, None)
+
+        if location_override_count:
+            if location_examples:
+                warnings.append(
+                    f"{location_override_count} satirda lokasyon kurali nedeniyle 'Genel Merkez' uygulandi. "
+                    f"Ornek konumlar: {', '.join(location_examples)}"
+                )
+            else:
+                warnings.append(
+                    f"{location_override_count} satirda lokasyon kurali nedeniyle 'Genel Merkez' uygulandi."
+                )
 
         if batch_operations:
             self._commit_batch(batch)

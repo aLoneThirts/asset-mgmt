@@ -35,6 +35,7 @@ export function ImportPage() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const visibleWarnings = (result?.warnings ?? []).slice(0, 8);
 
   function handleSelect(nextFile: File | undefined) {
     if (!nextFile) return;
@@ -179,10 +180,15 @@ export function ImportPage() {
             <div className="rounded-xl border border-green-200 bg-white/80 p-4">
               <p className="mb-2 text-sm font-semibold text-slate-800">Uyarilar</p>
               <ul className="space-y-1 text-sm text-slate-600">
-                {result.warnings.map((warning) => (
+                {visibleWarnings.map((warning) => (
                   <li key={warning}>{warning}</li>
                 ))}
               </ul>
+              {result.warnings.length > visibleWarnings.length && (
+                <p className="mt-2 text-xs text-slate-500">
+                  +{result.warnings.length - visibleWarnings.length} ek uyari daha var.
+                </p>
+              )}
             </div>
           )}
         </div>
