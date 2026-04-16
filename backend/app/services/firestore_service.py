@@ -10,22 +10,40 @@ from typing import Any
 import pandas as pd
 from firebase_admin import firestore
 
-from backend.app.core.firebase_admin import get_firestore_client
-from backend.app.models.schemas import (
-    Asset,
-    AssetCreate,
-    AssetUpdate,
-    DashboardSummary,
-    ImportResult,
-    LogEntry,
-    MaintenanceCreate,
-    MaintenanceRecord,
-    MaintenanceUpdate,
-    NotificationItem,
-    StockCreate,
-    StockItem,
-    StockUpdate,
-)
+try:
+    from backend.app.core.firebase_admin import get_firestore_client
+    from backend.app.models.schemas import (
+        Asset,
+        AssetCreate,
+        AssetUpdate,
+        DashboardSummary,
+        ImportResult,
+        LogEntry,
+        MaintenanceCreate,
+        MaintenanceRecord,
+        MaintenanceUpdate,
+        NotificationItem,
+        StockCreate,
+        StockItem,
+        StockUpdate,
+    )
+except ModuleNotFoundError:
+    from app.core.firebase_admin import get_firestore_client
+    from app.models.schemas import (
+        Asset,
+        AssetCreate,
+        AssetUpdate,
+        DashboardSummary,
+        ImportResult,
+        LogEntry,
+        MaintenanceCreate,
+        MaintenanceRecord,
+        MaintenanceUpdate,
+        NotificationItem,
+        StockCreate,
+        StockItem,
+        StockUpdate,
+    )
 
 
 ASSETS = "assets"

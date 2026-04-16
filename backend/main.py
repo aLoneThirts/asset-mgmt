@@ -5,24 +5,44 @@ from functools import lru_cache
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.app.core.config import get_settings
-from backend.app.core.security import AuthUser, get_current_user
-from backend.app.models.schemas import (
-    Asset,
-    AssetCreate,
-    AssetUpdate,
-    DashboardSummary,
-    ImportResult,
-    LogEntry,
-    MaintenanceCreate,
-    MaintenanceRecord,
-    MaintenanceUpdate,
-    SessionLogRequest,
-    StockCreate,
-    StockItem,
-    StockUpdate,
-)
-from backend.app.services.firestore_service import FirestoreService
+try:
+    from backend.app.core.config import get_settings
+    from backend.app.core.security import AuthUser, get_current_user
+    from backend.app.models.schemas import (
+        Asset,
+        AssetCreate,
+        AssetUpdate,
+        DashboardSummary,
+        ImportResult,
+        LogEntry,
+        MaintenanceCreate,
+        MaintenanceRecord,
+        MaintenanceUpdate,
+        SessionLogRequest,
+        StockCreate,
+        StockItem,
+        StockUpdate,
+    )
+    from backend.app.services.firestore_service import FirestoreService
+except ModuleNotFoundError:
+    from app.core.config import get_settings
+    from app.core.security import AuthUser, get_current_user
+    from app.models.schemas import (
+        Asset,
+        AssetCreate,
+        AssetUpdate,
+        DashboardSummary,
+        ImportResult,
+        LogEntry,
+        MaintenanceCreate,
+        MaintenanceRecord,
+        MaintenanceUpdate,
+        SessionLogRequest,
+        StockCreate,
+        StockItem,
+        StockUpdate,
+    )
+    from app.services.firestore_service import FirestoreService
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name)

@@ -6,7 +6,10 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from firebase_admin import auth
 
-from backend.app.core.firebase_admin import get_firebase_app
+try:
+    from backend.app.core.firebase_admin import get_firebase_app
+except ModuleNotFoundError:
+    from app.core.firebase_admin import get_firebase_app
 
 bearer_scheme = HTTPBearer(auto_error=True)
 

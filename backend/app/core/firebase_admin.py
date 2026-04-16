@@ -3,7 +3,10 @@ from __future__ import annotations
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-from backend.app.core.config import get_settings
+try:
+    from backend.app.core.config import get_settings
+except ModuleNotFoundError:
+    from app.core.config import get_settings
 
 
 def get_firebase_app() -> firebase_admin.App:
