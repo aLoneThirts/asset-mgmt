@@ -138,7 +138,7 @@ def parse_datetime(value: Any) -> datetime | None:
         return dt.astimezone(UTC) if dt.tzinfo else dt.replace(tzinfo=UTC)
     if isinstance(value, str) and value.strip():
         try:
-            dt = pd.to_datetime(value, utc=True).to_pydatetime()
+            dt = pd.to_datetime(value, utc=True, dayfirst=True).to_pydatetime()
             return dt.astimezone(UTC)
         except Exception:
             return None
@@ -375,6 +375,14 @@ class FirestoreService:
                 "Firestore kotasi asildi. Bir sure sonra tekrar deneyin veya Firebase plan/kota ayarini yukseltin."
             ) from exc
 
+    def _commit_batch(self, batch: firestore.WriteBatch) -> None:
+        try:
+            batch.commit()
+        except ResourceExhausted as exc:
+            raise RuntimeError(
+                "Firestore kotasi asildi. Bir sure sonra tekrar deneyin veya Firebase plan/kota ayarini yukseltin."
+            ) from exc
+
     def list_logs(self, limit_count: int = 100) -> list[LogEntry]:
         try:
             docs = (
@@ -540,6 +548,31 @@ class FirestoreService:
         if personnel_items:
             batch.commit()
 
+    def _apply_personnel_assignment_counts(
+        self,
+        active_counts: Counter[str],
+        personnel_ids: set[str],
+    ) -> None:
+        if not personnel_ids:
+            return
+
+        batch = self.db.batch()
+        update_count = 0
+        for personnel_id in personnel_ids:
+            if not personnel_id:
+                continue
+            batch.set(
+                self.db.collection(PERSONNEL).document(personnel_id),
+                {
+                    "active_assignment_count": max(0, int(active_counts.get(personnel_id, 0))),
+                    "updated_at": now_utc(),
+                },
+                merge=True,
+            )
+            update_count += 1
+        if update_count:
+            self._commit_batch(batch)
+
     def _ensure_import_personnel(
         self,
         full_name: str,
@@ -572,20 +605,19 @@ class FirestoreService:
     def _sync_import_assignment(
         self,
         asset_id: str,
+        asset_name: str,
+        asset_code: str,
         personnel_name: str,
         assigned_at: datetime,
         user_email: str,
         personnel_cache: dict[str, Personnel],
         active_assignments_by_asset: dict[str, AssignmentRecord],
+        assignment_counts: Counter[str],
+        touched_personnel_ids: set[str],
     ) -> None:
         personnel = self._ensure_import_personnel(personnel_name, personnel_cache)
         asset_ref = self.db.collection(ASSETS).document(asset_id)
-        asset_snapshot = asset_ref.get()
-        if not asset_snapshot.exists:
-            return
-
-        asset = document_to_asset(asset_snapshot)
-        current_assignment = active_assignments_by_asset.get(asset.id)
+        current_assignment = active_assignments_by_asset.get(asset_id)
 
         if current_assignment and normalize_text(current_assignment.personnel_name) == normalize_text(personnel.full_name):
             asset_ref.update(
@@ -606,13 +638,19 @@ class FirestoreService:
                     "is_active": False,
                 }
             )
+            if current_assignment.personnel_id:
+                assignment_counts[current_assignment.personnel_id] = max(
+                    0,
+                    assignment_counts.get(current_assignment.personnel_id, 0) - 1,
+                )
+                touched_personnel_ids.add(current_assignment.personnel_id)
 
         assignment_ref = self.db.collection(ASSIGNMENTS).document()
         assignment_ref.set(
             {
-                "asset_id": asset.id,
-                "asset_name": asset.name,
-                "asset_code": asset.asset_id,
+                "asset_id": asset_id,
+                "asset_name": asset_name,
+                "asset_code": asset_code,
                 "personnel_id": personnel.id,
                 "personnel_name": personnel.full_name,
                 "department": personnel.department,
@@ -632,13 +670,31 @@ class FirestoreService:
                 "updated_at": now_utc(),
             }
         )
-        active_assignments_by_asset[asset.id] = document_to_assignment(assignment_ref.get())
+        assignment_counts[personnel.id] = assignment_counts.get(personnel.id, 0) + 1
+        touched_personnel_ids.add(personnel.id)
+        active_assignments_by_asset[asset_id] = AssignmentRecord(
+            id=assignment_ref.id,
+            asset_id=asset_id,
+            asset_name=asset_name,
+            asset_code=asset_code,
+            personnel_id=personnel.id,
+            personnel_name=personnel.full_name,
+            department=personnel.department,
+            note="Excel import zimmet senkronizasyonu",
+            assigned_by=user_email,
+            assigned_at=assigned_at,
+            returned_at=None,
+            returned_by=None,
+            is_active=True,
+        )
 
     def _clear_import_assignment(
         self,
         asset_id: str,
         user_email: str,
         active_assignments_by_asset: dict[str, AssignmentRecord],
+        assignment_counts: Counter[str],
+        touched_personnel_ids: set[str],
     ) -> None:
         current_assignment = active_assignments_by_asset.get(asset_id)
         if current_assignment:
@@ -650,6 +706,12 @@ class FirestoreService:
                     "note": current_assignment.note or "Excel import zimmet temizleme",
                 }
             )
+            if current_assignment.personnel_id:
+                assignment_counts[current_assignment.personnel_id] = max(
+                    0,
+                    assignment_counts.get(current_assignment.personnel_id, 0) - 1,
+                )
+                touched_personnel_ids.add(current_assignment.personnel_id)
             active_assignments_by_asset.pop(asset_id, None)
 
         self.db.collection(ASSETS).document(asset_id).update(
@@ -675,12 +737,30 @@ class FirestoreService:
         updated_count = 0
         skipped_count = 0
         batch = self.db.batch()
-        personnel_cache = self._get_personnel_cache()
-        active_assignments_by_asset = {
-            item.asset_id: item for item in self.list_assignments(active_only=True)
-        }
-        assignment_sync_rows: list[tuple[str, str, datetime]] = []
-        assignment_clear_rows: list[str] = []
+        batch_operations = 0
+        read_limited_mode = False
+        try:
+            existing_assets_by_id = {item.id: item for item in self._list_assets_raw()}
+            personnel_cache = self._get_personnel_cache()
+            active_assignments_by_asset = {
+                item.asset_id: item for item in self._list_assignments_raw(active_only=True)
+            }
+            assignment_counts = Counter(
+                item.personnel_id for item in active_assignments_by_asset.values() if item.personnel_id
+            )
+        except RuntimeError:
+            read_limited_mode = True
+            existing_assets_by_id = {}
+            personnel_cache = {}
+            active_assignments_by_asset = {}
+            assignment_counts = Counter()
+            warnings.append(
+                "Firestore okuma kotasi sinirda oldugu icin hizli import modu kullanildi. "
+                "Zimmet kayitlari assignment tablosuna tam senkronize edilemeyebilir."
+            )
+        touched_personnel_ids: set[str] = set()
+        assignment_sync_rows: dict[str, tuple[str, str, datetime]] = {}
+        assignment_clear_rows: set[str] = set()
 
         for index, raw_row in frame.iterrows():
             row = raw_row.to_dict()
@@ -706,8 +786,8 @@ class FirestoreService:
             category = clean_optional(row.get("kategori")) or clean_optional(row.get("kategori_agaci"))
             zimmet_name = clean_assignment_name(row.get("zimmet"))
             doc_ref = self.db.collection(ASSETS).document(asset_id)
-            existing_snapshot = doc_ref.get()
-            existing = existing_snapshot.to_dict() if existing_snapshot.exists else {}
+            existing_asset = existing_assets_by_id.get(asset_id)
+            existing_assignment = active_assignments_by_asset.get(asset_id)
 
             payload = {
                 "asset_id": asset_id,
@@ -718,41 +798,83 @@ class FirestoreService:
                 "status": sanitize_asset_status(clean_optional(row.get("durum"))),
                 "location": "Genel Merkez",
                 "added_at": added_at,
-                "created_by": (existing or {}).get("created_by") or user_email,
                 "updated_at": now_utc(),
                 "assigned_to": zimmet_name,
-                "assigned_department": (existing or {}).get("assigned_department") if zimmet_name else None,
-                "assignment_id": (existing or {}).get("assignment_id") if zimmet_name else None,
+                "assigned_department": (existing_assignment.department if existing_assignment else None)
+                if zimmet_name
+                else None,
+                "assignment_id": (existing_assignment.id if existing_assignment else None)
+                if zimmet_name
+                else None,
             }
+            if not read_limited_mode:
+                payload["created_by"] = (existing_asset.created_by if existing_asset else None) or user_email
 
             batch.set(doc_ref, payload, merge=True)
-            if existing_snapshot.exists:
+            batch_operations += 1
+            if batch_operations >= 400:
+                self._commit_batch(batch)
+                batch = self.db.batch()
+                batch_operations = 0
+
+            if read_limited_mode:
+                updated_count += 1
+            elif existing_asset:
                 updated_count += 1
             else:
                 imported_count += 1
+                existing_assets_by_id[asset_id] = Asset(
+                    id=asset_id,
+                    asset_id=asset_id,
+                    name=name,
+                    serial_number=payload["serial_number"],
+                    category=payload["category"],
+                    brand_model=payload["brand_model"],
+                    status=payload["status"],
+                    location="Genel Merkez",
+                    added_at=added_at,
+                    created_by=user_email,
+                    updated_at=payload["updated_at"],
+                    assigned_to=payload["assigned_to"],
+                    assigned_department=payload["assigned_department"],
+                    assignment_id=payload["assignment_id"],
+                )
 
-            if zimmet_name:
-                assignment_sync_rows.append((asset_id, zimmet_name, added_at))
-            elif (existing or {}).get("assignment_id") or (existing or {}).get("assigned_to"):
-                assignment_clear_rows.append(asset_id)
+            if zimmet_name and not read_limited_mode:
+                assignment_sync_rows[asset_id] = (name, zimmet_name, added_at)
+                assignment_clear_rows.discard(asset_id)
+            elif not read_limited_mode and (
+                existing_assignment or (existing_asset and (existing_asset.assignment_id or existing_asset.assigned_to))
+            ):
+                assignment_clear_rows.add(asset_id)
+                assignment_sync_rows.pop(asset_id, None)
 
-        batch.commit()
-        for asset_id, zimmet_name, assigned_at in assignment_sync_rows:
-            self._sync_import_assignment(
-                asset_id=asset_id,
-                personnel_name=zimmet_name,
-                assigned_at=assigned_at,
-                user_email=user_email,
-                personnel_cache=personnel_cache,
-                active_assignments_by_asset=active_assignments_by_asset,
-            )
-        for asset_id in assignment_clear_rows:
-            self._clear_import_assignment(
-                asset_id=asset_id,
-                user_email=user_email,
-                active_assignments_by_asset=active_assignments_by_asset,
-            )
-        self._rebuild_personnel_assignment_counts()
+        if batch_operations:
+            self._commit_batch(batch)
+
+        if not read_limited_mode:
+            for asset_id, (asset_name, zimmet_name, assigned_at) in assignment_sync_rows.items():
+                self._sync_import_assignment(
+                    asset_id=asset_id,
+                    asset_name=asset_name,
+                    asset_code=asset_id,
+                    personnel_name=zimmet_name,
+                    assigned_at=assigned_at,
+                    user_email=user_email,
+                    personnel_cache=personnel_cache,
+                    active_assignments_by_asset=active_assignments_by_asset,
+                    assignment_counts=assignment_counts,
+                    touched_personnel_ids=touched_personnel_ids,
+                )
+            for asset_id in assignment_clear_rows:
+                self._clear_import_assignment(
+                    asset_id=asset_id,
+                    user_email=user_email,
+                    active_assignments_by_asset=active_assignments_by_asset,
+                    assignment_counts=assignment_counts,
+                    touched_personnel_ids=touched_personnel_ids,
+                )
+            self._apply_personnel_assignment_counts(assignment_counts, touched_personnel_ids)
         self.add_log(
             user_email,
             "excel_import",
@@ -766,12 +888,9 @@ class FirestoreService:
         )
 
     def list_maintenance(self) -> list[MaintenanceRecord]:
-        docs = (
-            self.db.collection(MAINTENANCE)
-            .order_by("date", direction=firestore.Query.DESCENDING)
-            .stream()
-        )
-        return [document_to_maintenance(doc) for doc in docs]
+        docs = self._read_collection(MAINTENANCE)
+        items = [document_to_maintenance(doc) for doc in docs]
+        return sorted(items, key=lambda item: item.date, reverse=True)
 
     def create_maintenance(self, payload: MaintenanceCreate, user_email: str) -> MaintenanceRecord:
         asset = self.get_asset(payload.asset_id)
