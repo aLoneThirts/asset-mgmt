@@ -4,6 +4,7 @@ import { CheckCircle2, FileSpreadsheet, Upload } from "lucide-react";
 import toast from "react-hot-toast";
 
 import { uploadAssetExcel, type ImportResult } from "@/lib/firestore";
+import { isQuotaError } from "@/lib/query-errors";
 
 const EXPECTED_COLUMNS = [
   "Demirbas ID",
@@ -157,11 +158,17 @@ export function ImportPage() {
       )}
 
       {errorMessage && (
-        <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
-          <p className="text-sm font-semibold text-red-900">Import hatasi</p>
-          <p className="mt-1 text-sm text-red-800">{errorMessage}</p>
-        </div>
-      )}
+          <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
+            <p className="text-sm font-semibold text-red-900">Import hatasi</p>
+            <p className="mt-1 text-sm text-red-800">{errorMessage}</p>
+            {isQuotaError(new Error(errorMessage)) && (
+              <p className="mt-3 text-xs text-red-700">
+                Bu durumda demirbaslar silinmis olmaz. Firestore gecici olarak kota sinirina takildigi icin import ve listeleme
+                cevap veremez.
+              </p>
+            )}
+          </div>
+        )}
 
       {result && (
         <div className="space-y-4 rounded-2xl border border-green-200 bg-green-50 p-5">

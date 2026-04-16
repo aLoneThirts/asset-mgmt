@@ -5,6 +5,7 @@ import { Toaster } from "react-hot-toast";
 import { AuthProvider } from "@/context/AuthContext";
 import { ProtectedRoute } from "@/components/layout/ProtectedRoute";
 import { AppLayout } from "@/components/layout/AppLayout";
+import { shouldRetryQuery } from "@/lib/query-errors";
 
 const LoginPage       = lazy(() => import("@/pages/Login").then(m => ({ default: m.LoginPage })));
 const DashboardPage   = lazy(() => import("@/pages/Dashboard").then(m => ({ default: m.DashboardPage })));
@@ -17,7 +18,14 @@ const AdminUsersPage  = lazy(() => import("@/pages/AdminUsers").then(m => ({ def
 const AssignmentsPage = lazy(() => import("@/pages/Assignments").then(m => ({ default: m.AssignmentsPage })));
 const ReportsPage     = lazy(() => import("@/pages/Reports").then(m => ({ default: m.ReportsPage })));
 
-const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 30_000 } } });
+const qc = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: shouldRetryQuery,
+      staleTime: 30_000,
+    },
+  },
+});
 
 export default function App() {
   return (

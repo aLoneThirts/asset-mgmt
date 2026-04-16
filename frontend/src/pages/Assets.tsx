@@ -11,6 +11,7 @@ import {
   type Asset,
   type AssetPayload,
 } from "@/lib/firestore";
+import { QueryErrorState } from "@/components/ui/QueryErrorState";
 
 const STATUS_COLORS: Record<string, string> = {
   Aktif: "bg-green-100 text-green-700",
@@ -27,7 +28,7 @@ export function AssetsPage() {
   const [modal, setModal] = useState<"add" | "edit" | null>(null);
   const [selected, setSelected] = useState<Asset | null>(null);
 
-  const { data: assets = [], isLoading } = useQuery({
+  const { data: assets = [], error, isLoading, refetch } = useQuery({
     queryKey: ["assets"],
     queryFn: getAssets,
   });
@@ -150,6 +151,8 @@ export function AssetsPage() {
           )}
         </div>
       </div>
+
+      {error && <QueryErrorState error={error} onRetry={() => void refetch()} title="Demirbas listesi alinamadi" />}
 
       <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
         {isLoading ? (

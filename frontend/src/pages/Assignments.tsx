@@ -17,18 +17,29 @@ import {
   type Personnel,
   type PersonnelPayload,
 } from "@/lib/firestore";
+import { QueryErrorState } from "@/components/ui/QueryErrorState";
 
 export function AssignmentsPage() {
   const qc = useQueryClient();
   const [personnelModal, setPersonnelModal] = useState(false);
   const [assignmentModal, setAssignmentModal] = useState(false);
 
-  const { data: personnel = [], isLoading: personnelLoading } = useQuery({
+  const {
+    data: personnel = [],
+    error: personnelError,
+    isLoading: personnelLoading,
+    refetch: refetchPersonnel,
+  } = useQuery({
     queryKey: ["personnel"],
     queryFn: getPersonnel,
   });
 
-  const { data: assignments = [], isLoading: assignmentLoading } = useQuery({
+  const {
+    data: assignments = [],
+    error: assignmentError,
+    isLoading: assignmentLoading,
+    refetch: refetchAssignments,
+  } = useQuery({
     queryKey: ["assignments"],
     queryFn: () => getAssignments(false),
   });
@@ -92,6 +103,17 @@ export function AssignmentsPage() {
           </button>
         </div>
       </div>
+
+      {(personnelError || assignmentError) && (
+        <QueryErrorState
+          error={personnelError ?? assignmentError}
+          onRetry={() => {
+            void refetchPersonnel();
+            void refetchAssignments();
+          }}
+          title="Zimmet veya personel verileri alinamadi"
+        />
+      )}
 
       <div className="grid gap-6 xl:grid-cols-[1.05fr_1.3fr]">
         <section className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">

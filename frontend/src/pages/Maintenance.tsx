@@ -12,6 +12,7 @@ import {
   type MaintenanceRecord,
   type MaintenanceStatus,
 } from "@/lib/firestore";
+import { QueryErrorState } from "@/components/ui/QueryErrorState";
 
 const STATUS_COLORS: Record<string, string> = {
   Acik: "bg-red-100 text-red-700",
@@ -23,7 +24,7 @@ export function MaintenancePage() {
   const qc = useQueryClient();
   const [showModal, setShowModal] = useState(false);
 
-  const { data: records = [], isLoading } = useQuery({
+  const { data: records = [], error, isLoading, refetch } = useQuery({
     queryKey: ["maintenance"],
     queryFn: getMaintenance,
   });
@@ -57,6 +58,8 @@ export function MaintenancePage() {
           Ariza Kaydi Ac
         </button>
       </div>
+
+      {error && <QueryErrorState error={error} onRetry={() => void refetch()} title="Ariza kayitlari alinamadi" />}
 
       <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
         {isLoading ? (

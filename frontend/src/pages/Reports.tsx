@@ -4,9 +4,10 @@ import { Download, FileSpreadsheet, Files, UserCheck } from "lucide-react";
 import toast from "react-hot-toast";
 
 import { downloadAssignmentsCsv, downloadExcelReport, getReportSummary } from "@/lib/firestore";
+import { QueryErrorState } from "@/components/ui/QueryErrorState";
 
 export function ReportsPage() {
-  const { data, isLoading } = useQuery({
+  const { data, error, isLoading, refetch } = useQuery({
     queryKey: ["report-summary"],
     queryFn: getReportSummary,
   });
@@ -34,6 +35,8 @@ export function ReportsPage() {
           Yonetim raporlarini olusturun, Excel ciktilarini indirin ve zimmet durumunu toplu gorun.
         </p>
       </div>
+
+      {error && <QueryErrorState error={error} onRetry={() => void refetch()} title="Rapor ozeti alinamadi" />}
 
       <div className="grid gap-4 md:grid-cols-3">
         <SummaryCard
