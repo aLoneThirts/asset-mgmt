@@ -114,7 +114,15 @@ def clean_assignment_name(value: Any) -> str | None:
     text = clean_optional(value)
     if not text:
         return None
-    if normalize_text(text) in {"-", "yok", "none", "null", "nan", "atanmadi", "atanmamis"}:
+    raw = text.strip()
+    if raw in {"-", "--", "---", "."}:
+        return None
+    normalized = normalize_text(text)
+    if not normalized:
+        return None
+    if normalized in {"yok", "none", "null", "nan", "atanmadi", "atanmamis"}:
+        return None
+    if len(raw) < 2:
         return None
     return text
 
