@@ -1,28 +1,32 @@
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import api from "@/lib/api";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/context/AuthContext";
+import { getStock, createStock, updateStock, deleteStock } from "@/lib/firestore";
+import type { StockItem } from "@/lib/firestore";
 import toast from "react-hot-toast";
 import { Plus, X, AlertTriangle } from "lucide-react";
 
-interface StockItem {
-  id: string; name: string; quantity: number; min_quantity: number;
-  unit?: string; category?: string; low_stock: boolean;
-}
-
 export function StockPage() {
+  const { user } = useAuth();
   const qc = useQueryClient();
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing]     = useState<StockItem | null>(null);
 
   const { data: items = [], isLoading } = useQuery<StockItem[]>({
     queryKey: ["stock"],
-    queryFn: () => api.get("/api/v1/stock/").then(r => r.data),
+    queryFn: getStock,
   });
 
-  const deleteMut = useMutation({
-    mutationFn: (id: string) => api.delete(`/api/v1/stock/${id}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["stock"] }); toast.success("Silindi."); },
-  });
+  const handleDelete = async (item: StockItem) => {
+    if (!confirm("Silinsin mi?")) return;
+    try {
+      await deleteStock(item.id, item.name, user!.email!);
+      qc.invalidateQueries({ queryKey: ["stock"] });
+      toast.success("Silindi.");
+    } catch {
+      toast.error("Silinemedi.");
+    }
+  };
 
   const lowCount = items.filter(i => i.low_stock).length;
 
@@ -82,7 +86,7 @@ export function StockPage() {
                     <div className="flex gap-2">
                       <button onClick={() => { setEditing(item); setShowModal(true); }}
                         className="text-xs text-brand-600 hover:underline">Düzenle</button>
-                      <button onClick={() => { if (confirm("Silinsin mi?")) deleteMut.mutate(item.id); }}
+                      <button onClick={() => handleDelete(item)}
                         className="text-xs text-red-500 hover:underline">Sil</button>
                     </div>
                   </td>
@@ -96,6 +100,7 @@ export function StockPage() {
       {showModal && (
         <StockModal
           item={editing}
+          userEmail={user!.email!}
           onClose={() => { setShowModal(false); setEditing(null); }}
           onSaved={() => { qc.invalidateQueries({ queryKey: ["stock"] }); setShowModal(false); setEditing(null); }}
         />
@@ -104,7 +109,9 @@ export function StockPage() {
   );
 }
 
-function StockModal({ item, onClose, onSaved }: { item: StockItem | null; onClose: () => void; onSaved: () => void }) {
+function StockModal({ item, userEmail, onClose, onSaved }: {
+  item: StockItem | null; userEmail: string; onClose: () => void; onSaved: () => void;
+}) {
   const [form, setForm] = useState({
     name: item?.name ?? "", category: item?.category ?? "",
     quantity: item?.quantity ?? 0, min_quantity: item?.min_quantity ?? 5,
@@ -116,8 +123,11 @@ function StockModal({ item, onClose, onSaved }: { item: StockItem | null; onClos
     e.preventDefault();
     setLoading(true);
     try {
-      if (item) await api.put(`/api/v1/stock/${item.id}`, form);
-      else await api.post("/api/v1/stock/", form);
+      if (item) {
+        await updateStock(item.id, form, item, userEmail);
+      } else {
+        await createStock(form, userEmail);
+      }
       toast.success(item ? "Güncellendi." : "Stok eklendi.");
       onSaved();
     } catch {

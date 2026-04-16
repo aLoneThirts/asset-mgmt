@@ -1,36 +1,39 @@
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import api from "@/lib/api";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/context/AuthContext";
+import {
+  getMaintenance, createMaintenance, updateMaintenance, getAssets,
+} from "@/lib/firestore";
+import type { MaintenanceRecord, Asset } from "@/lib/firestore";
 import toast from "react-hot-toast";
 import { Plus, X } from "lucide-react";
 
-interface MaintenanceRecord {
-  id: string; asset_id: string; asset_name: string;
-  description: string; reported_by_email: string; date: string; status: string;
-}
-interface Asset { id: string; name: string; }
-
 const STATUS_COLORS: Record<string, string> = {
-  "Açık":          "bg-red-100 text-red-700",
-  "Devam Ediyor":  "bg-orange-100 text-orange-700",
-  "Çözüldü":       "bg-green-100 text-green-700",
+  "Açık":         "bg-red-100 text-red-700",
+  "Devam Ediyor": "bg-orange-100 text-orange-700",
+  "Çözüldü":      "bg-green-100 text-green-700",
 };
 
 export function MaintenancePage() {
+  const { user } = useAuth();
   const qc = useQueryClient();
   const [showModal, setShowModal] = useState(false);
 
   const { data: records = [], isLoading } = useQuery<MaintenanceRecord[]>({
     queryKey: ["maintenance"],
-    queryFn: () => api.get("/api/v1/maintenance/").then(r => r.data),
+    queryFn: getMaintenance,
   });
 
-  const updateMut = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) =>
-      api.put(`/api/v1/maintenance/${id}`, { status }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["maintenance"] }); qc.invalidateQueries({ queryKey: ["assets"] }); toast.success("Güncellendi."); },
-    onError: () => toast.error("Güncelleme başarısız."),
-  });
+  const handleStatusChange = async (record: MaintenanceRecord, status: string) => {
+    try {
+      await updateMaintenance(record.id, status, record.asset_id, user!.email!);
+      qc.invalidateQueries({ queryKey: ["maintenance"] });
+      qc.invalidateQueries({ queryKey: ["assets"] });
+      toast.success("Güncellendi.");
+    } catch {
+      toast.error("Güncelleme başarısız.");
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -72,7 +75,7 @@ export function MaintenancePage() {
                     {r.status !== "Çözüldü" && (
                       <select
                         defaultValue={r.status}
-                        onChange={e => updateMut.mutate({ id: r.id, status: e.target.value })}
+                        onChange={e => handleStatusChange(r, e.target.value)}
                         className="text-xs border border-slate-200 rounded-lg px-2 py-1 focus:outline-none focus:ring-1 focus:ring-brand-500"
                       >
                         <option>Açık</option>
@@ -90,29 +93,38 @@ export function MaintenancePage() {
 
       {showModal && (
         <AddMaintenanceModal
+          userEmail={user!.email!}
           onClose={() => setShowModal(false)}
-          onSaved={() => { qc.invalidateQueries({ queryKey: ["maintenance"] }); setShowModal(false); }}
+          onSaved={() => {
+            qc.invalidateQueries({ queryKey: ["maintenance"] });
+            qc.invalidateQueries({ queryKey: ["assets"] });
+            setShowModal(false);
+          }}
         />
       )}
     </div>
   );
 }
 
-function AddMaintenanceModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+function AddMaintenanceModal({ userEmail, onClose, onSaved }: {
+  userEmail: string; onClose: () => void; onSaved: () => void;
+}) {
   const { data: assets = [] } = useQuery<Asset[]>({
     queryKey: ["assets"],
-    queryFn: () => api.get("/api/v1/assets/").then(r => r.data),
+    queryFn: getAssets,
   });
 
-  const [assetId, setAssetId]   = useState("");
-  const [desc, setDesc]         = useState("");
-  const [loading, setLoading]   = useState(false);
+  const [assetId, setAssetId] = useState("");
+  const [desc, setDesc]       = useState("");
+  const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const asset = assets.find(a => a.id === assetId);
+    if (!asset) return;
     setLoading(true);
     try {
-      await api.post("/api/v1/maintenance/", { asset_id: assetId, description: desc });
+      await createMaintenance(asset.id, asset.name, desc, userEmail);
       toast.success("Arıza kaydı oluşturuldu.");
       onSaved();
     } catch {

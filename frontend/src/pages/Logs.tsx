@@ -1,12 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
-import api from "@/lib/api";
-
-interface Log { id: string; user: string; action: string; detail: string; date: string; }
+import { getLogs } from "@/lib/firestore";
+import type { Log } from "@/lib/firestore";
 
 export function LogsPage() {
   const { data: logs = [], isLoading } = useQuery<Log[]>({
     queryKey: ["logs"],
-    queryFn: () => api.get("/api/v1/logs/?limit=200").then(r => r.data),
+    queryFn: () => getLogs(200),
   });
 
   return (

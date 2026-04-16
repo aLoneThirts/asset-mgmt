@@ -1,13 +1,12 @@
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import api from "@/lib/api";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/context/AuthContext";
+import {
+  getAssets, createAsset, updateAsset, deleteAsset,
+} from "@/lib/firestore";
+import type { Asset } from "@/lib/firestore";
 import toast from "react-hot-toast";
 import { Plus, Search, Trash2, Pencil, X } from "lucide-react";
-
-interface Asset {
-  id: string; name: string; serial_no?: string; category?: string;
-  brand?: string; model?: string; status: string; location: string; added_at?: string;
-}
 
 const STATUS_COLORS: Record<string, string> = {
   "Aktif":   "bg-green-100 text-green-700",
@@ -16,23 +15,29 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export function AssetsPage() {
+  const { user } = useAuth();
   const qc = useQueryClient();
-  const [search, setSearch]   = useState("");
-  const [filterStatus, setFS] = useState("");
-  const [filterCat, setFC]    = useState("");
-  const [modal, setModal]     = useState<"add" | "edit" | null>(null);
+  const [search, setSearch]     = useState("");
+  const [filterStatus, setFS]   = useState("");
+  const [filterCat, setFC]      = useState("");
+  const [modal, setModal]       = useState<"add" | "edit" | null>(null);
   const [selected, setSelected] = useState<Asset | null>(null);
 
   const { data: assets = [], isLoading } = useQuery<Asset[]>({
     queryKey: ["assets"],
-    queryFn: () => api.get("/api/v1/assets/").then(r => r.data),
+    queryFn: getAssets,
   });
 
-  const deleteMut = useMutation({
-    mutationFn: (id: string) => api.delete(`/api/v1/assets/${id}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["assets"] }); toast.success("Silindi."); },
-    onError: () => toast.error("Silinemedi."),
-  });
+  const handleDelete = async (asset: Asset) => {
+    if (!confirm("Silmek istediğinize emin misiniz?")) return;
+    try {
+      await deleteAsset(asset.id, asset.name, user!.email!);
+      qc.invalidateQueries({ queryKey: ["assets"] });
+      toast.success("Silindi.");
+    } catch {
+      toast.error("Silinemedi.");
+    }
+  };
 
   const filtered = assets.filter(a => {
     const matchSearch = !search || a.name.toLowerCase().includes(search.toLowerCase()) || a.id.toLowerCase().includes(search.toLowerCase());
@@ -53,7 +58,6 @@ export function AssetsPage() {
         </button>
       </div>
 
-      {/* Filtreler */}
       <div className="flex flex-wrap gap-3">
         <div className="relative">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -79,7 +83,6 @@ export function AssetsPage() {
         )}
       </div>
 
-      {/* Tablo */}
       <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
         {isLoading ? (
           <div className="p-8 text-center text-sm text-slate-400">Yükleniyor...</div>
@@ -114,7 +117,7 @@ export function AssetsPage() {
                         className="p-1.5 hover:bg-slate-100 rounded-lg transition" title="Düzenle">
                         <Pencil size={14} className="text-slate-500" />
                       </button>
-                      <button onClick={() => { if (confirm("Silmek istediğinize emin misiniz?")) deleteMut.mutate(asset.id); }}
+                      <button onClick={() => handleDelete(asset)}
                         className="p-1.5 hover:bg-red-50 rounded-lg transition" title="Sil">
                         <Trash2 size={14} className="text-red-500" />
                       </button>
@@ -127,11 +130,11 @@ export function AssetsPage() {
         )}
       </div>
 
-      {/* Modal */}
       {modal && (
         <AssetModal
           mode={modal}
           asset={selected}
+          userEmail={user!.email!}
           onClose={() => { setModal(null); setSelected(null); }}
           onSaved={() => { qc.invalidateQueries({ queryKey: ["assets"] }); setModal(null); setSelected(null); }}
         />
@@ -140,9 +143,9 @@ export function AssetsPage() {
   );
 }
 
-function AssetModal({ mode, asset, onClose, onSaved }: {
+function AssetModal({ mode, asset, userEmail, onClose, onSaved }: {
   mode: "add" | "edit"; asset: Asset | null;
-  onClose: () => void; onSaved: () => void;
+  userEmail: string; onClose: () => void; onSaved: () => void;
 }) {
   const [form, setForm] = useState({
     name: asset?.name ?? "", serial_no: asset?.serial_no ?? "",
@@ -157,8 +160,11 @@ function AssetModal({ mode, asset, onClose, onSaved }: {
     e.preventDefault();
     setLoading(true);
     try {
-      if (mode === "add") await api.post("/api/v1/assets/", form);
-      else await api.put(`/api/v1/assets/${asset!.id}`, form);
+      if (mode === "add") {
+        await createAsset({ ...form, location: "Genel Merkez" }, userEmail);
+      } else {
+        await updateAsset(asset!.id, form, userEmail);
+      }
       toast.success(mode === "add" ? "Demirbaş eklendi." : "Güncellendi.");
       onSaved();
     } catch {
