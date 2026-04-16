@@ -160,7 +160,7 @@ export function AssetsPage() {
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                {["Demirbas ID", "Urun Adi", "Seri No", "Kategori", "Marka / Model", "Durum", "Lokasyon", ""].map((header) => (
+                {["Demirbas ID", "Urun Adi", "Seri No", "Kategori", "Marka / Model", "Durum", "Zimmet", "Lokasyon", ""].map((header) => (
                   <th key={header} className="px-4 py-3 font-semibold">
                     {header}
                   </th>
@@ -179,6 +179,16 @@ export function AssetsPage() {
                     <span className={`rounded-full px-2 py-1 text-xs font-semibold ${STATUS_COLORS[asset.status] || "bg-slate-100 text-slate-700"}`}>
                       {asset.status}
                     </span>
+                  </td>
+                  <td className="px-4 py-3 text-slate-600">
+                    {asset.assigned_to ? (
+                      <div>
+                        <p className="font-medium text-slate-800">{asset.assigned_to}</p>
+                        <p className="text-xs text-slate-400">{asset.assigned_department || "Departman yok"}</p>
+                      </div>
+                    ) : (
+                      "-"
+                    )}
                   </td>
                   <td className="px-4 py-3 text-slate-600">{asset.location}</td>
                   <td className="px-4 py-3">

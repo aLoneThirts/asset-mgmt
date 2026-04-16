@@ -14,6 +14,8 @@ const StockPage       = lazy(() => import("@/pages/Stock").then(m => ({ default:
 const ImportPage      = lazy(() => import("@/pages/ImportExcel").then(m => ({ default: m.ImportPage })));
 const LogsPage        = lazy(() => import("@/pages/Logs").then(m => ({ default: m.LogsPage })));
 const AdminUsersPage  = lazy(() => import("@/pages/AdminUsers").then(m => ({ default: m.AdminUsersPage })));
+const AssignmentsPage = lazy(() => import("@/pages/Assignments").then(m => ({ default: m.AssignmentsPage })));
+const ReportsPage     = lazy(() => import("@/pages/Reports").then(m => ({ default: m.ReportsPage })));
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 30_000 } } });
 
@@ -33,7 +35,9 @@ export default function App() {
                   <Route path="/assets"      element={<AssetsPage />} />
                   <Route path="/maintenance" element={<MaintenancePage />} />
                   <Route path="/stock"       element={<StockPage />} />
+                  <Route path="/assignments" element={<AssignmentsPage />} />
                   <Route path="/import"      element={<ImportPage />} />
+                  <Route path="/reports"     element={<ReportsPage />} />
                   <Route path="/logs"        element={<LogsPage />} />
                   <Route path="/admin/users" element={<AdminUsersPage />} />
                 </Route>

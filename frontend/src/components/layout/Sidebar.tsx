@@ -3,10 +3,12 @@ import {
   ShieldCheck,
   BarChart3,
   Bell,
+  ContactRound,
   FileSpreadsheet,
   LayoutDashboard,
   LogOut,
   Package,
+  PieChart,
   ScrollText,
   Wrench,
 } from "lucide-react";
@@ -19,7 +21,9 @@ const links = [
   { to: "/assets", icon: Package, label: "Demirbaslar" },
   { to: "/maintenance", icon: Wrench, label: "Ariza Takip" },
   { to: "/stock", icon: BarChart3, label: "Stok" },
+  { to: "/assignments", icon: ContactRound, label: "Zimmet & Personel" },
   { to: "/import", icon: FileSpreadsheet, label: "Excel Import" },
+  { to: "/reports", icon: PieChart, label: "Raporlar" },
   { to: "/logs", icon: ScrollText, label: "Loglar" },
   { to: "/admin/users", icon: ShieldCheck, label: "Kullanicilar" },
 ];

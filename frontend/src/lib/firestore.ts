@@ -17,6 +17,19 @@ interface ApiAsset {
   added_at?: string | null;
   created_by?: string | null;
   updated_at?: string | null;
+  assigned_to?: string | null;
+  assigned_department?: string | null;
+  assignment_id?: string | null;
+}
+
+interface ApiChartDatum {
+  label: string;
+  value: number;
+}
+
+interface ApiTrendDatum {
+  label: string;
+  value: number;
 }
 
 interface ApiMaintenanceRecord {
@@ -61,9 +74,50 @@ interface ApiDashboard {
   broken_assets: number;
   open_maintenance: number;
   low_stock_count: number;
+  assigned_assets: number;
   low_stock_items: ApiStockItem[];
   recent_logs: ApiLog[];
   notifications: ApiNotification[];
+  asset_status_breakdown: ApiChartDatum[];
+  category_breakdown: ApiChartDatum[];
+  maintenance_trend: ApiTrendDatum[];
+  assignment_department_breakdown: ApiChartDatum[];
+}
+
+interface ApiPersonnel {
+  id: string;
+  full_name: string;
+  email?: string | null;
+  department?: string | null;
+  title?: string | null;
+  location: string;
+  employee_code?: string | null;
+  active_assignment_count: number;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+interface ApiAssignmentRecord {
+  id: string;
+  asset_id: string;
+  asset_name: string;
+  asset_code: string;
+  personnel_id: string;
+  personnel_name: string;
+  department?: string | null;
+  note?: string | null;
+  assigned_by: string;
+  assigned_at: string;
+  returned_at?: string | null;
+  returned_by?: string | null;
+  is_active: boolean;
+}
+
+interface ApiReportSummary {
+  total_personnel: number;
+  active_assignments: number;
+  unassigned_assets: number;
+  exported_at: string;
 }
 
 export interface Asset {
@@ -78,6 +132,9 @@ export interface Asset {
   added_at?: string;
   created_by?: string;
   updated_at?: string;
+  assigned_to?: string;
+  assigned_department?: string;
+  assignment_id?: string;
 }
 
 export interface AssetPayload {
@@ -127,14 +184,29 @@ export interface Notification {
   detail: string;
 }
 
+export interface ChartDatum {
+  label: string;
+  value: number;
+}
+
+export interface TrendDatum {
+  label: string;
+  value: number;
+}
+
 export interface DashboardSummary {
   total_assets: number;
   broken_assets: number;
   open_maintenance: number;
   low_stock_count: number;
+  assigned_assets: number;
   low_stock_items: StockItem[];
   recent_logs: Log[];
   notifications: Notification[];
+  asset_status_breakdown: ChartDatum[];
+  category_breakdown: ChartDatum[];
+  maintenance_trend: TrendDatum[];
+  assignment_department_breakdown: ChartDatum[];
 }
 
 export interface ImportResult {
@@ -162,6 +234,58 @@ export interface AdminUser {
   disabled: boolean;
   created_at?: string;
   last_sign_in_at?: string;
+}
+
+export interface Personnel {
+  id: string;
+  full_name: string;
+  email?: string;
+  department?: string;
+  title?: string;
+  location: string;
+  employee_code?: string;
+  active_assignment_count: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface PersonnelPayload {
+  full_name: string;
+  email?: string;
+  department?: string;
+  title?: string;
+  location?: string;
+  employee_code?: string;
+}
+
+export interface AssignmentRecord {
+  id: string;
+  asset_id: string;
+  asset_name: string;
+  asset_code: string;
+  personnel_id: string;
+  personnel_name: string;
+  department?: string;
+  note?: string;
+  assigned_by: string;
+  assigned_at: string;
+  returned_at?: string;
+  returned_by?: string;
+  is_active: boolean;
+}
+
+export interface AssignmentPayload {
+  asset_id: string;
+  personnel_id: string;
+  note?: string;
+  assigned_at?: string;
+}
+
+export interface ReportSummary {
+  total_personnel: number;
+  active_assignments: number;
+  unassigned_assets: number;
+  exported_at: string;
 }
 
 async function getAuthToken() {
@@ -205,6 +329,28 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function apiDownload(path: string): Promise<Blob> {
+  const token = await getAuthToken();
+  const response = await fetch(`${API_BASE}${path}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    let message = "Dosya indirilemedi.";
+    try {
+      const data = (await response.json()) as { detail?: string };
+      message = data.detail || message;
+    } catch {
+      // no-op
+    }
+    throw new Error(message);
+  }
+
+  return response.blob();
+}
+
 function mapAsset(item: ApiAsset): Asset {
   return {
     id: item.id,
@@ -218,6 +364,9 @@ function mapAsset(item: ApiAsset): Asset {
     added_at: item.added_at ?? undefined,
     created_by: item.created_by ?? undefined,
     updated_at: item.updated_at ?? undefined,
+    assigned_to: item.assigned_to ?? undefined,
+    assigned_department: item.assigned_department ?? undefined,
+    assignment_id: item.assignment_id ?? undefined,
   };
 }
 
@@ -256,6 +405,39 @@ function mapAdminUser(item: ApiAdminUser): AdminUser {
     disabled: item.disabled,
     created_at: item.created_at ?? undefined,
     last_sign_in_at: item.last_sign_in_at ?? undefined,
+  };
+}
+
+function mapPersonnel(item: ApiPersonnel): Personnel {
+  return {
+    id: item.id,
+    full_name: item.full_name,
+    email: item.email ?? undefined,
+    department: item.department ?? undefined,
+    title: item.title ?? undefined,
+    location: item.location,
+    employee_code: item.employee_code ?? undefined,
+    active_assignment_count: item.active_assignment_count,
+    created_at: item.created_at ?? undefined,
+    updated_at: item.updated_at ?? undefined,
+  };
+}
+
+function mapAssignment(item: ApiAssignmentRecord): AssignmentRecord {
+  return {
+    id: item.id,
+    asset_id: item.asset_id,
+    asset_name: item.asset_name,
+    asset_code: item.asset_code,
+    personnel_id: item.personnel_id,
+    personnel_name: item.personnel_name,
+    department: item.department ?? undefined,
+    note: item.note ?? undefined,
+    assigned_by: item.assigned_by,
+    assigned_at: item.assigned_at,
+    returned_at: item.returned_at ?? undefined,
+    returned_by: item.returned_by ?? undefined,
+    is_active: item.is_active,
   };
 }
 
@@ -375,9 +557,14 @@ export async function getDashboard(): Promise<DashboardSummary> {
     broken_assets: data.broken_assets,
     open_maintenance: data.open_maintenance,
     low_stock_count: data.low_stock_count,
+    assigned_assets: data.assigned_assets,
     low_stock_items: data.low_stock_items.map(mapStock),
     recent_logs: data.recent_logs,
     notifications: data.notifications,
+    asset_status_breakdown: data.asset_status_breakdown,
+    category_breakdown: data.category_breakdown,
+    maintenance_trend: data.maintenance_trend,
+    assignment_department_breakdown: data.assignment_department_breakdown,
   };
 }
 
@@ -392,4 +579,81 @@ export async function updateAdminRole(uid: string, isAdmin: boolean): Promise<Ad
     body: JSON.stringify({ is_admin: isAdmin }),
   });
   return mapAdminUser(item);
+}
+
+export async function getPersonnel(): Promise<Personnel[]> {
+  const items = await apiRequest<ApiPersonnel[]>("/personnel");
+  return items.map(mapPersonnel);
+}
+
+export async function createPersonnel(data: PersonnelPayload): Promise<Personnel> {
+  const item = await apiRequest<ApiPersonnel>("/personnel", {
+    method: "POST",
+    body: JSON.stringify({
+      full_name: data.full_name,
+      email: data.email || null,
+      department: data.department || null,
+      title: data.title || null,
+      location: data.location || "Genel Merkez",
+      employee_code: data.employee_code || null,
+    }),
+  });
+  return mapPersonnel(item);
+}
+
+export async function updatePersonnel(id: string, data: Partial<PersonnelPayload>): Promise<Personnel> {
+  const item = await apiRequest<ApiPersonnel>(`/personnel/${id}`, {
+    method: "PUT",
+    body: JSON.stringify({
+      full_name: data.full_name,
+      email: data.email,
+      department: data.department,
+      title: data.title,
+      location: data.location,
+      employee_code: data.employee_code,
+    }),
+  });
+  return mapPersonnel(item);
+}
+
+export async function deletePersonnel(id: string): Promise<void> {
+  await apiRequest<void>(`/personnel/${id}`, { method: "DELETE" });
+}
+
+export async function getAssignments(activeOnly = false): Promise<AssignmentRecord[]> {
+  const items = await apiRequest<ApiAssignmentRecord[]>(`/assignments?active_only=${activeOnly}`);
+  return items.map(mapAssignment);
+}
+
+export async function createAssignment(data: AssignmentPayload): Promise<AssignmentRecord> {
+  const item = await apiRequest<ApiAssignmentRecord>("/assignments", {
+    method: "POST",
+    body: JSON.stringify({
+      asset_id: data.asset_id,
+      personnel_id: data.personnel_id,
+      note: data.note || null,
+      assigned_at: data.assigned_at || null,
+    }),
+  });
+  return mapAssignment(item);
+}
+
+export async function returnAssignment(id: string, note?: string): Promise<AssignmentRecord> {
+  const item = await apiRequest<ApiAssignmentRecord>(`/assignments/${id}/return`, {
+    method: "PATCH",
+    body: JSON.stringify({ note: note || null }),
+  });
+  return mapAssignment(item);
+}
+
+export async function getReportSummary(): Promise<ReportSummary> {
+  return apiRequest<ApiReportSummary>("/reports/summary");
+}
+
+export async function downloadExcelReport(): Promise<Blob> {
+  return apiDownload("/reports/export.xlsx");
+}
+
+export async function downloadAssignmentsCsv(): Promise<Blob> {
+  return apiDownload("/reports/assignments.csv");
 }

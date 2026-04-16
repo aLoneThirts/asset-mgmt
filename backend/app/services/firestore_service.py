@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Iterable
 from datetime import UTC, datetime
-from io import BytesIO
+from io import BytesIO, StringIO
+import csv
 import math
 import re
 from typing import Any
@@ -16,6 +18,10 @@ try:
         Asset,
         AssetCreate,
         AssetUpdate,
+        AssignmentCreate,
+        AssignmentRecord,
+        AssignmentReturn,
+        ChartDatum,
         DashboardSummary,
         ImportResult,
         LogEntry,
@@ -23,9 +29,14 @@ try:
         MaintenanceRecord,
         MaintenanceUpdate,
         NotificationItem,
+        Personnel,
+        PersonnelCreate,
+        PersonnelUpdate,
+        ReportSummary,
         StockCreate,
         StockItem,
         StockUpdate,
+        TrendDatum,
     )
 except ModuleNotFoundError:
     from app.core.firebase_admin import get_firestore_client
@@ -33,6 +44,10 @@ except ModuleNotFoundError:
         Asset,
         AssetCreate,
         AssetUpdate,
+        AssignmentCreate,
+        AssignmentRecord,
+        AssignmentReturn,
+        ChartDatum,
         DashboardSummary,
         ImportResult,
         LogEntry,
@@ -40,9 +55,14 @@ except ModuleNotFoundError:
         MaintenanceRecord,
         MaintenanceUpdate,
         NotificationItem,
+        Personnel,
+        PersonnelCreate,
+        PersonnelUpdate,
+        ReportSummary,
         StockCreate,
         StockItem,
         StockUpdate,
+        TrendDatum,
     )
 
 
@@ -50,6 +70,8 @@ ASSETS = "assets"
 MAINTENANCE = "maintenance"
 STOCK = "stock"
 LOGS = "logs"
+PERSONNEL = "personnel"
+ASSIGNMENTS = "assignments"
 
 
 def now_utc() -> datetime:
@@ -153,6 +175,9 @@ def document_to_asset(doc: firestore.DocumentSnapshot) -> Asset:
         added_at=serialize_datetime(data.get("added_at")),
         created_by=data.get("created_by"),
         updated_at=serialize_datetime(data.get("updated_at")),
+        assigned_to=data.get("assigned_to"),
+        assigned_department=data.get("assigned_department"),
+        assignment_id=data.get("assignment_id"),
     )
 
 
@@ -197,14 +222,49 @@ def document_to_log(doc: firestore.DocumentSnapshot) -> LogEntry:
     )
 
 
+def document_to_personnel(doc: firestore.DocumentSnapshot) -> Personnel:
+    data = doc.to_dict() or {}
+    return Personnel(
+        id=doc.id,
+        full_name=data.get("full_name", ""),
+        email=data.get("email"),
+        department=data.get("department"),
+        title=data.get("title"),
+        location=data.get("location", "Genel Merkez"),
+        employee_code=data.get("employee_code"),
+        active_assignment_count=int(data.get("active_assignment_count", 0)),
+        created_at=serialize_datetime(data.get("created_at")),
+        updated_at=serialize_datetime(data.get("updated_at")),
+    )
+
+
+def document_to_assignment(doc: firestore.DocumentSnapshot) -> AssignmentRecord:
+    data = doc.to_dict() or {}
+    return AssignmentRecord(
+        id=doc.id,
+        asset_id=data.get("asset_id", ""),
+        asset_name=data.get("asset_name", ""),
+        asset_code=data.get("asset_code", ""),
+        personnel_id=data.get("personnel_id", ""),
+        personnel_name=data.get("personnel_name", ""),
+        department=data.get("department"),
+        note=data.get("note"),
+        assigned_by=data.get("assigned_by", ""),
+        assigned_at=serialize_datetime(data.get("assigned_at")) or now_utc(),
+        returned_at=serialize_datetime(data.get("returned_at")),
+        returned_by=data.get("returned_by"),
+        is_active=bool(data.get("is_active", False)),
+    )
+
+
 class FirestoreService:
     def __init__(self) -> None:
         self.db = get_firestore_client()
 
-    def add_log(self, user_email: str, action: str, detail: str) -> None:
+    def add_log(self, user: str, action: str, detail: str) -> None:
         self.db.collection(LOGS).add(
             {
-                "user": user_email,
+                "user": user,
                 "action": action,
                 "detail": detail,
                 "date": firestore.SERVER_TIMESTAMP,
@@ -237,15 +297,19 @@ class FirestoreService:
             raise ValueError("Ayni Demirbas ID zaten mevcut.")
 
         now = now_utc()
-        data = {
-            **payload.model_dump(),
-            "status": sanitize_asset_status(payload.status),
-            "location": "Genel Merkez",
-            "added_at": payload.added_at or now,
-            "created_by": user_email,
-            "updated_at": now,
-        }
-        doc_ref.set(data)
+        doc_ref.set(
+            {
+                **payload.model_dump(),
+                "status": sanitize_asset_status(payload.status),
+                "location": "Genel Merkez",
+                "added_at": payload.added_at or now,
+                "created_by": user_email,
+                "updated_at": now,
+                "assigned_to": None,
+                "assigned_department": None,
+                "assignment_id": None,
+            }
+        )
         self.add_log(user_email, "asset_created", f"{payload.asset_id} - {payload.name} olusturuldu.")
         return document_to_asset(doc_ref.get())
 
@@ -268,7 +332,10 @@ class FirestoreService:
         snapshot = doc_ref.get()
         if not snapshot.exists:
             raise KeyError("Asset not found.")
-        name = (snapshot.to_dict() or {}).get("name", asset_id)
+        data = snapshot.to_dict() or {}
+        if data.get("assignment_id"):
+            raise ValueError("Aktif zimmeti olan demirbas silinemez.")
+        name = data.get("name", asset_id)
         doc_ref.delete()
         self.add_log(user_email, "asset_deleted", f"{asset_id} - {name} silindi.")
 
@@ -299,7 +366,6 @@ class FirestoreService:
                 "kategori": "kategori",
                 "kategori_agaci": "kategori_agaci",
                 "marka": "marka",
-                "model": "model",
                 "marka_model": "marka_model",
                 "durum": "durum",
                 "lokasyon": "lokasyon",
@@ -312,15 +378,12 @@ class FirestoreService:
             }
             if normalized in aliases:
                 mapped_columns[column] = aliases[normalized]
-
-        normalized_frame = frame.rename(columns=mapped_columns)
-        return normalized_frame
+        return frame.rename(columns=mapped_columns)
 
     def _resolve_asset_name(self, row: dict[str, Any]) -> str | None:
         explicit = clean_optional(row.get("urun_adi"))
         brand = clean_optional(row.get("marka"))
         model = clean_optional(row.get("model"))
-
         if explicit and explicit != model:
             return explicit
         if brand and model:
@@ -365,7 +428,8 @@ class FirestoreService:
             )
             category = clean_optional(row.get("kategori")) or clean_optional(row.get("kategori_agaci"))
             doc_ref = self.db.collection(ASSETS).document(asset_id)
-            exists = doc_ref.get().exists
+            existing_snapshot = doc_ref.get()
+            existing = existing_snapshot.to_dict() if existing_snapshot.exists else {}
 
             payload = {
                 "asset_id": asset_id,
@@ -376,12 +440,15 @@ class FirestoreService:
                 "status": sanitize_asset_status(clean_optional(row.get("durum"))),
                 "location": "Genel Merkez",
                 "added_at": added_at,
-                "created_by": user_email,
+                "created_by": (existing or {}).get("created_by") or user_email,
                 "updated_at": now_utc(),
+                "assigned_to": (existing or {}).get("assigned_to"),
+                "assigned_department": (existing or {}).get("assigned_department"),
+                "assignment_id": (existing or {}).get("assignment_id"),
             }
 
             batch.set(doc_ref, payload, merge=True)
-            if exists:
+            if existing_snapshot.exists:
                 updated_count += 1
             else:
                 imported_count += 1
@@ -411,19 +478,18 @@ class FirestoreService:
         asset = self.get_asset(payload.asset_id)
         doc_ref = self.db.collection(MAINTENANCE).document()
         fault_id = f"FLT-{now_utc().strftime('%Y%m%d')}-{doc_ref.id[:6].upper()}"
-        record = {
-            "fault_id": fault_id,
-            "asset_id": asset.id,
-            "asset_name": asset.name,
-            "description": payload.description.strip(),
-            "reported_by": user_email,
-            "date": now_utc(),
-            "status": "Acik",
-        }
-        doc_ref.set(record)
-        self.db.collection(ASSETS).document(asset.id).update(
-            {"status": "Arizali", "updated_at": now_utc()}
+        doc_ref.set(
+            {
+                "fault_id": fault_id,
+                "asset_id": asset.id,
+                "asset_name": asset.name,
+                "description": payload.description.strip(),
+                "reported_by": user_email,
+                "date": now_utc(),
+                "status": "Acik",
+            }
         )
+        self.db.collection(ASSETS).document(asset.id).update({"status": "Arizali", "updated_at": now_utc()})
         self.add_log(user_email, "maintenance_created", f"{asset.asset_id} icin ariza kaydi acildi.")
         return document_to_maintenance(doc_ref.get())
 
@@ -438,9 +504,7 @@ class FirestoreService:
         doc_ref.update({"status": status})
 
         if status == "Cozuldu":
-            self.db.collection(ASSETS).document(current.asset_id).update(
-                {"status": "Aktif", "updated_at": now_utc()}
-            )
+            self.db.collection(ASSETS).document(current.asset_id).update({"status": "Aktif", "updated_at": now_utc()})
 
         self.add_log(user_email, "maintenance_updated", f"{current.fault_id} durumu {status} oldu.")
         return document_to_maintenance(doc_ref.get())
@@ -452,8 +516,7 @@ class FirestoreService:
 
     def create_stock(self, payload: StockCreate, user_email: str) -> StockItem:
         doc_ref = self.db.collection(STOCK).document()
-        record = {**payload.model_dump(), "updated_at": now_utc()}
-        doc_ref.set(record)
+        doc_ref.set({**payload.model_dump(), "updated_at": now_utc()})
         self.add_log(user_email, "stock_created", f"{payload.name} stok kalemi eklendi.")
         return document_to_stock(doc_ref.get())
 
@@ -475,6 +538,143 @@ class FirestoreService:
         name = (snapshot.to_dict() or {}).get("name", stock_id)
         doc_ref.delete()
         self.add_log(user_email, "stock_deleted", f"{name} stok kalemi silindi.")
+
+    def list_personnel(self) -> list[Personnel]:
+        docs = self.db.collection(PERSONNEL).stream()
+        items = [document_to_personnel(doc) for doc in docs]
+        return sorted(items, key=lambda item: item.full_name.lower())
+
+    def create_personnel(self, payload: PersonnelCreate, user_email: str) -> Personnel:
+        doc_ref = self.db.collection(PERSONNEL).document()
+        now = now_utc()
+        doc_ref.set(
+            {
+                **payload.model_dump(),
+                "active_assignment_count": 0,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        self.add_log(user_email, "personnel_created", f"{payload.full_name} personel kaydi eklendi.")
+        return document_to_personnel(doc_ref.get())
+
+    def update_personnel(self, personnel_id: str, payload: PersonnelUpdate, user_email: str) -> Personnel:
+        doc_ref = self.db.collection(PERSONNEL).document(personnel_id)
+        snapshot = doc_ref.get()
+        if not snapshot.exists:
+            raise KeyError("Personnel not found.")
+        data = {key: value for key, value in payload.model_dump().items() if value is not None}
+        data["updated_at"] = now_utc()
+        doc_ref.update(data)
+        self.add_log(user_email, "personnel_updated", f"{personnel_id} personel kaydi guncellendi.")
+        self._sync_personnel_assignments(personnel_id)
+        return document_to_personnel(doc_ref.get())
+
+    def delete_personnel(self, personnel_id: str, user_email: str) -> None:
+        doc_ref = self.db.collection(PERSONNEL).document(personnel_id)
+        snapshot = doc_ref.get()
+        if not snapshot.exists:
+            raise KeyError("Personnel not found.")
+        data = snapshot.to_dict() or {}
+        if int(data.get("active_assignment_count", 0)) > 0:
+            raise ValueError("Aktif zimmeti olan personel silinemez.")
+        name = data.get("full_name", personnel_id)
+        doc_ref.delete()
+        self.add_log(user_email, "personnel_deleted", f"{name} personel kaydi silindi.")
+
+    def list_assignments(self, active_only: bool = False) -> list[AssignmentRecord]:
+        docs = self.db.collection(ASSIGNMENTS).stream()
+        items = [document_to_assignment(doc) for doc in docs]
+        if active_only:
+            items = [item for item in items if item.is_active]
+        return sorted(items, key=lambda item: item.assigned_at, reverse=True)
+
+    def create_assignment(self, payload: AssignmentCreate, user_email: str) -> AssignmentRecord:
+        asset_ref = self.db.collection(ASSETS).document(payload.asset_id)
+        personnel_ref = self.db.collection(PERSONNEL).document(payload.personnel_id)
+        asset_snapshot = asset_ref.get()
+        personnel_snapshot = personnel_ref.get()
+
+        if not asset_snapshot.exists:
+            raise KeyError("Asset not found.")
+        if not personnel_snapshot.exists:
+            raise KeyError("Personnel not found.")
+
+        asset = document_to_asset(asset_snapshot)
+        personnel = document_to_personnel(personnel_snapshot)
+        if asset.assignment_id:
+            raise ValueError("Bu demirbas zaten zimmetli.")
+
+        doc_ref = self.db.collection(ASSIGNMENTS).document()
+        assigned_at = payload.assigned_at or now_utc()
+        doc_ref.set(
+            {
+                "asset_id": asset.id,
+                "asset_name": asset.name,
+                "asset_code": asset.asset_id,
+                "personnel_id": personnel.id,
+                "personnel_name": personnel.full_name,
+                "department": personnel.department,
+                "note": clean_optional(payload.note),
+                "assigned_by": user_email,
+                "assigned_at": assigned_at,
+                "returned_at": None,
+                "returned_by": None,
+                "is_active": True,
+            }
+        )
+        asset_ref.update(
+            {
+                "assigned_to": personnel.full_name,
+                "assigned_department": personnel.department,
+                "assignment_id": doc_ref.id,
+                "updated_at": now_utc(),
+            }
+        )
+        self._sync_personnel_assignments(personnel.id)
+        self.add_log(user_email, "assignment_created", f"{asset.asset_id} {personnel.full_name} uzerine zimmetlendi.")
+        return document_to_assignment(doc_ref.get())
+
+    def return_assignment(self, assignment_id: str, payload: AssignmentReturn, user_email: str) -> AssignmentRecord:
+        assignment_ref = self.db.collection(ASSIGNMENTS).document(assignment_id)
+        snapshot = assignment_ref.get()
+        if not snapshot.exists:
+            raise KeyError("Assignment not found.")
+
+        assignment = document_to_assignment(snapshot)
+        if not assignment.is_active:
+            raise ValueError("Zimmet zaten iade edilmis.")
+
+        assignment_ref.update(
+            {
+                "returned_at": payload.returned_at or now_utc(),
+                "returned_by": user_email,
+                "is_active": False,
+                "note": clean_optional(payload.note) or assignment.note,
+            }
+        )
+        self.db.collection(ASSETS).document(assignment.asset_id).update(
+            {
+                "assigned_to": None,
+                "assigned_department": None,
+                "assignment_id": None,
+                "updated_at": now_utc(),
+            }
+        )
+        self._sync_personnel_assignments(assignment.personnel_id)
+        self.add_log(user_email, "assignment_returned", f"{assignment.asset_code} zimmeti iade alindi.")
+        return document_to_assignment(assignment_ref.get())
+
+    def _sync_personnel_assignments(self, personnel_id: str) -> None:
+        active_count = sum(
+            1 for item in self.list_assignments(active_only=True) if item.personnel_id == personnel_id
+        )
+        self.db.collection(PERSONNEL).document(personnel_id).update(
+            {
+                "active_assignment_count": active_count,
+                "updated_at": now_utc(),
+            }
+        )
 
     def build_notifications(
         self, stock_items: Iterable[StockItem], maintenance_items: Iterable[MaintenanceRecord]
@@ -501,14 +701,41 @@ class FirestoreService:
                         detail=item.description,
                     )
                 )
-
         return notifications[:10]
+
+    def _build_status_breakdown(self, assets: list[Asset]) -> list[ChartDatum]:
+        counts = Counter(item.status for item in assets)
+        return [ChartDatum(label=label, value=counts.get(label, 0)) for label in ["Aktif", "Arizali", "Hurda"]]
+
+    def _build_category_breakdown(self, assets: list[Asset]) -> list[ChartDatum]:
+        counts = Counter(item.category or "Kategorisiz" for item in assets)
+        return [ChartDatum(label=label, value=value) for label, value in counts.most_common(6)]
+
+    def _build_assignment_department_breakdown(self, assignments: list[AssignmentRecord]) -> list[ChartDatum]:
+        counts = Counter(item.department or "Departman Yok" for item in assignments if item.is_active)
+        return [ChartDatum(label=label, value=value) for label, value in counts.most_common(6)]
+
+    def _build_maintenance_trend(self, maintenance: list[MaintenanceRecord]) -> list[TrendDatum]:
+        now = now_utc()
+        buckets: list[TrendDatum] = []
+        current_month = now.month
+        current_year = now.year
+        for offset in range(5, -1, -1):
+            month = current_month - offset
+            year = current_year
+            while month <= 0:
+                month += 12
+                year -= 1
+            count = sum(1 for item in maintenance if item.date.year == year and item.date.month == month)
+            buckets.append(TrendDatum(label=f"{month:02d}/{year}", value=count))
+        return buckets
 
     def get_dashboard(self) -> DashboardSummary:
         assets = self.list_assets()
         maintenance = self.list_maintenance()
         stock_items = self.list_stock()
         logs = self.list_logs(limit_count=10)
+        assignments = self.list_assignments(active_only=True)
         notifications = self.build_notifications(stock_items, maintenance)
 
         return DashboardSummary(
@@ -516,10 +743,126 @@ class FirestoreService:
             broken_assets=sum(1 for item in assets if item.status == "Arizali"),
             open_maintenance=sum(1 for item in maintenance if item.status != "Cozuldu"),
             low_stock_count=sum(1 for item in stock_items if item.low_stock),
+            assigned_assets=len(assignments),
             low_stock_items=[item for item in stock_items if item.low_stock],
             recent_logs=logs,
             notifications=notifications,
+            asset_status_breakdown=self._build_status_breakdown(assets),
+            category_breakdown=self._build_category_breakdown(assets),
+            maintenance_trend=self._build_maintenance_trend(maintenance),
+            assignment_department_breakdown=self._build_assignment_department_breakdown(assignments),
         )
+
+    def get_report_summary(self) -> ReportSummary:
+        personnel = self.list_personnel()
+        assignments = self.list_assignments(active_only=True)
+        assets = self.list_assets()
+        return ReportSummary(
+            total_personnel=len(personnel),
+            active_assignments=len(assignments),
+            unassigned_assets=sum(1 for item in assets if not item.assignment_id),
+            exported_at=now_utc(),
+        )
+
+    def export_report_workbook(self) -> bytes:
+        assets = self.list_assets()
+        maintenance = self.list_maintenance()
+        stock_items = self.list_stock()
+        personnel = self.list_personnel()
+        assignments = self.list_assignments()
+
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            pd.DataFrame(
+                [
+                    {
+                        "Demirbas ID": item.asset_id,
+                        "Urun Adi": item.name,
+                        "Seri No": item.serial_number,
+                        "Kategori": item.category,
+                        "Marka / Model": item.brand_model,
+                        "Durum": item.status,
+                        "Lokasyon": item.location,
+                        "Zimmetli Kisi": item.assigned_to,
+                        "Departman": item.assigned_department,
+                    }
+                    for item in assets
+                ]
+            ).to_excel(writer, index=False, sheet_name="Demirbaslar")
+            pd.DataFrame(
+                [
+                    {
+                        "Ariza ID": item.fault_id,
+                        "Demirbas": item.asset_name,
+                        "Demirbas ID": item.asset_id,
+                        "Aciklama": item.description,
+                        "Bildiren": item.reported_by,
+                        "Durum": item.status,
+                        "Tarih": item.date.isoformat(),
+                    }
+                    for item in maintenance
+                ]
+            ).to_excel(writer, index=False, sheet_name="ArizaKayitlari")
+            pd.DataFrame(
+                [
+                    {
+                        "Personel": item.full_name,
+                        "E-posta": item.email,
+                        "Departman": item.department,
+                        "Unvan": item.title,
+                        "Personel Kodu": item.employee_code,
+                        "Aktif Zimmet": item.active_assignment_count,
+                    }
+                    for item in personnel
+                ]
+            ).to_excel(writer, index=False, sheet_name="Personel")
+            pd.DataFrame(
+                [
+                    {
+                        "Demirbas ID": item.asset_code,
+                        "Demirbas": item.asset_name,
+                        "Personel": item.personnel_name,
+                        "Departman": item.department,
+                        "Not": item.note,
+                        "Zimmet Tarihi": item.assigned_at.isoformat(),
+                        "Iade Tarihi": item.returned_at.isoformat() if item.returned_at else None,
+                        "Durum": "Aktif" if item.is_active else "Iade Edildi",
+                    }
+                    for item in assignments
+                ]
+            ).to_excel(writer, index=False, sheet_name="Zimmet")
+            pd.DataFrame(
+                [
+                    {
+                        "Urun": item.name,
+                        "Kategori": item.category,
+                        "Miktar": item.quantity,
+                        "Min. Stok": item.min_quantity,
+                        "Birim": item.unit,
+                        "Kritik": "Evet" if item.low_stock else "Hayir",
+                    }
+                    for item in stock_items
+                ]
+            ).to_excel(writer, index=False, sheet_name="Stok")
+        return output.getvalue()
+
+    def export_assignments_csv(self) -> bytes:
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["Demirbas ID", "Demirbas", "Personel", "Departman", "Zimmet Tarihi", "Iade Tarihi", "Durum"])
+        for item in self.list_assignments():
+            writer.writerow(
+                [
+                    item.asset_code,
+                    item.asset_name,
+                    item.personnel_name,
+                    item.department or "",
+                    item.assigned_at.isoformat(),
+                    item.returned_at.isoformat() if item.returned_at else "",
+                    "Aktif" if item.is_active else "Iade Edildi",
+                ]
+            )
+        return output.getvalue().encode("utf-8-sig")
 
     def log_session(self, user_email: str, event: str) -> None:
         action = "user_login" if event == "login" else "user_register"

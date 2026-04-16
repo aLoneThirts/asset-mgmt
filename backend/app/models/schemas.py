@@ -36,6 +36,9 @@ class Asset(AssetBase):
     id: str
     created_by: str | None = None
     updated_at: datetime | None = None
+    assigned_to: str | None = None
+    assigned_department: str | None = None
+    assignment_id: str | None = None
 
 
 class MaintenanceCreate(BaseModel):
@@ -104,9 +107,14 @@ class DashboardSummary(BaseModel):
     broken_assets: int
     open_maintenance: int
     low_stock_count: int
+    assigned_assets: int
     low_stock_items: list[StockItem]
     recent_logs: list[LogEntry]
     notifications: list[NotificationItem]
+    asset_status_breakdown: list["ChartDatum"]
+    category_breakdown: list["ChartDatum"]
+    maintenance_trend: list["TrendDatum"]
+    assignment_department_breakdown: list["ChartDatum"]
 
 
 class ImportResult(BaseModel):
@@ -132,3 +140,77 @@ class AdminUser(BaseModel):
 
 class AdminRoleUpdate(BaseModel):
     is_admin: bool
+
+
+class PersonnelBase(BaseModel):
+    full_name: str = Field(min_length=2)
+    email: str | None = None
+    department: str | None = None
+    title: str | None = None
+    location: str = "Genel Merkez"
+    employee_code: str | None = None
+
+
+class PersonnelCreate(PersonnelBase):
+    pass
+
+
+class PersonnelUpdate(BaseModel):
+    full_name: str | None = Field(default=None, min_length=2)
+    email: str | None = None
+    department: str | None = None
+    title: str | None = None
+    location: str | None = None
+    employee_code: str | None = None
+
+
+class Personnel(PersonnelBase):
+    id: str
+    active_assignment_count: int = 0
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class AssignmentCreate(BaseModel):
+    asset_id: str
+    personnel_id: str
+    note: str | None = None
+    assigned_at: datetime | None = None
+
+
+class AssignmentReturn(BaseModel):
+    note: str | None = None
+    returned_at: datetime | None = None
+
+
+class AssignmentRecord(BaseModel):
+    id: str
+    asset_id: str
+    asset_name: str
+    asset_code: str
+    personnel_id: str
+    personnel_name: str
+    department: str | None = None
+    note: str | None = None
+    assigned_by: str
+    assigned_at: datetime
+    returned_at: datetime | None = None
+    returned_by: str | None = None
+    is_active: bool = True
+
+
+class ChartDatum(BaseModel):
+    label: str
+    value: int
+
+
+class TrendDatum(BaseModel):
+    label: str
+    value: int
+
+
+class ReportSummary(BaseModel):
+    total_personnel: int
+    active_assignments: int
+    unassigned_assets: int
+    exported_at: datetime

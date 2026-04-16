@@ -5,6 +5,7 @@ from datetime import datetime, UTC
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from firebase_admin import auth as firebase_auth
 
 try:
@@ -16,12 +17,19 @@ try:
         Asset,
         AssetCreate,
         AssetUpdate,
+        AssignmentCreate,
+        AssignmentRecord,
+        AssignmentReturn,
         DashboardSummary,
         ImportResult,
         LogEntry,
         MaintenanceCreate,
         MaintenanceRecord,
         MaintenanceUpdate,
+        Personnel,
+        PersonnelCreate,
+        PersonnelUpdate,
+        ReportSummary,
         SessionLogRequest,
         StockCreate,
         StockItem,
@@ -37,12 +45,19 @@ except ModuleNotFoundError:
         Asset,
         AssetCreate,
         AssetUpdate,
+        AssignmentCreate,
+        AssignmentRecord,
+        AssignmentReturn,
         DashboardSummary,
         ImportResult,
         LogEntry,
         MaintenanceCreate,
         MaintenanceRecord,
         MaintenanceUpdate,
+        Personnel,
+        PersonnelCreate,
+        PersonnelUpdate,
+        ReportSummary,
         SessionLogRequest,
         StockCreate,
         StockItem,
@@ -142,6 +157,8 @@ def delete_asset(
         service.delete_asset(asset_id, user.email)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True}
 
 
@@ -235,6 +252,123 @@ def delete_stock(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"ok": True}
+
+
+@app.get("/personnel", response_model=list[Personnel])
+def list_personnel(
+    _: AuthUser = Depends(get_current_user),
+    service: FirestoreService = Depends(get_service),
+) -> list[Personnel]:
+    return service.list_personnel()
+
+
+@app.post("/personnel", response_model=Personnel, status_code=201)
+def create_personnel(
+    payload: PersonnelCreate,
+    user: AuthUser = Depends(get_current_user),
+    service: FirestoreService = Depends(get_service),
+) -> Personnel:
+    return service.create_personnel(payload, user.email)
+
+
+@app.put("/personnel/{personnel_id}", response_model=Personnel)
+def update_personnel(
+    personnel_id: str,
+    payload: PersonnelUpdate,
+    user: AuthUser = Depends(get_current_user),
+    service: FirestoreService = Depends(get_service),
+) -> Personnel:
+    try:
+        return service.update_personnel(personnel_id, payload, user.email)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/personnel/{personnel_id}")
+def delete_personnel(
+    personnel_id: str,
+    user: AuthUser = Depends(get_current_user),
+    service: FirestoreService = Depends(get_service),
+) -> dict[str, bool]:
+    try:
+        service.delete_personnel(personnel_id, user.email)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.get("/assignments", response_model=list[AssignmentRecord])
+def list_assignments(
+    active_only: bool = False,
+    _: AuthUser = Depends(get_current_user),
+    service: FirestoreService = Depends(get_service),
+) -> list[AssignmentRecord]:
+    return service.list_assignments(active_only=active_only)
+
+
+@app.post("/assignments", response_model=AssignmentRecord, status_code=201)
+def create_assignment(
+    payload: AssignmentCreate,
+    user: AuthUser = Depends(get_current_user),
+    service: FirestoreService = Depends(get_service),
+) -> AssignmentRecord:
+    try:
+        return service.create_assignment(payload, user.email)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.patch("/assignments/{assignment_id}/return", response_model=AssignmentRecord)
+def return_assignment(
+    assignment_id: str,
+    payload: AssignmentReturn,
+    user: AuthUser = Depends(get_current_user),
+    service: FirestoreService = Depends(get_service),
+) -> AssignmentRecord:
+    try:
+        return service.return_assignment(assignment_id, payload, user.email)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/reports/summary", response_model=ReportSummary)
+def get_report_summary(
+    _: AuthUser = Depends(get_current_user),
+    service: FirestoreService = Depends(get_service),
+) -> ReportSummary:
+    return service.get_report_summary()
+
+
+@app.get("/reports/export.xlsx")
+def export_report_workbook(
+    _: AuthUser = Depends(get_current_user),
+    service: FirestoreService = Depends(get_service),
+) -> StreamingResponse:
+    content = service.export_report_workbook()
+    return StreamingResponse(
+        iter([content]),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="asset-management-report.xlsx"'},
+    )
+
+
+@app.get("/reports/assignments.csv")
+def export_assignments_csv(
+    _: AuthUser = Depends(get_current_user),
+    service: FirestoreService = Depends(get_service),
+) -> StreamingResponse:
+    content = service.export_assignments_csv()
+    return StreamingResponse(
+        iter([content]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="zimmet-raporu.csv"'},
+    )
 
 
 def _from_millis(value: int | None) -> datetime | None:
