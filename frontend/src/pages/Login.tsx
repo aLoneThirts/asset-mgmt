@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import medicanaCampus from "@/assets/brand/medicana-campus.jpg";
+import medicanaLogo from "@/assets/brand/medicana-logo.svg";
 import { useAuth } from "@/context/AuthContext";
 
 export function LoginPage() {
@@ -37,26 +39,38 @@ export function LoginPage() {
   return (
     <div className="min-h-screen bg-slate-100">
       <div className="grid min-h-screen lg:grid-cols-[1.2fr_0.9fr]">
-        <section className="hidden bg-[radial-gradient(circle_at_top_left,_rgba(34,197,94,0.18),_transparent_30%),linear-gradient(135deg,#0f172a,#0b1220_40%,#111827)] p-12 lg:flex lg:flex-col lg:justify-between">
-          <div>
-            <p className="text-xl font-bold text-white">AssetTrack</p>
-            <p className="mt-1 text-sm text-emerald-300">Kurumsal Demirbas ve Envanter Yonetimi</p>
+        <section className="relative hidden overflow-hidden bg-[linear-gradient(135deg,#062a2e,#0b1723_45%,#111827)] p-12 lg:flex lg:flex-col lg:justify-between">
+          <img
+            src={medicanaCampus}
+            alt="Medicana International Ankara"
+            className="absolute inset-0 h-full w-full object-cover opacity-20"
+          />
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(45,212,191,0.20),_transparent_32%)]" />
+
+          <div className="relative z-10">
+            <img src={medicanaLogo} alt="Medicana Saglik Grubu" className="h-10 w-auto brightness-0 invert" />
+            <p className="mt-5 text-xl font-bold text-white">Envanter Takip</p>
+            <p className="mt-1 text-sm text-teal-200">Medicana icin kurumsal demirbas ve envanter yonetimi</p>
           </div>
 
-          <div className="max-w-xl space-y-8">
+          <div className="relative z-10 max-w-xl space-y-8">
             <div>
-              <p className="mb-4 text-xs font-semibold uppercase tracking-[0.3em] text-slate-400">Medicana Scale</p>
+              <p className="mb-4 text-xs font-semibold uppercase tracking-[0.3em] text-slate-300">Medicana Operasyon</p>
               <h1 className="text-5xl font-bold leading-tight text-white">
-                Demirbas, ariza ve stok akisini tek panelden yonetin.
+                Demirbas, ariza, zimmet ve stok akisini tek panelden yonetin.
               </h1>
+              <p className="mt-4 max-w-lg text-sm leading-6 text-slate-200">
+                Resmi Medicana kurumsal gorseliyle desteklenen bu panel, Excel operasyonlari ile gelen demirbas ve
+                personel verilerini tek merkezde toplar.
+              </p>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
               {[
                 "Firebase Auth ile giris ve kayit",
                 "Pandas tabanli Excel import akisi",
-                "Kritik stok ve acik ariza bildirimleri",
-                "Tum islemler icin merkezi log takibi",
+                "Zimmet ve personel takibi",
+                "Dashboard grafik ve rapor exportlari",
               ].map((item) => (
                 <div key={item} className="rounded-2xl border border-white/10 bg-white/5 p-4 text-sm text-slate-200">
                   {item}
@@ -65,7 +79,7 @@ export function LoginPage() {
             </div>
           </div>
 
-          <p className="text-xs text-slate-500">Vercel frontend · FastAPI backend · Firebase Firestore</p>
+          <p className="relative z-10 text-xs text-slate-300">Vercel frontend · FastAPI backend · Firebase Firestore</p>
         </section>
 
         <section className="flex items-center justify-center p-6">
@@ -79,6 +93,13 @@ export function LoginPage() {
                   ? "Yetkili kullanici bilgileri ile devam edin."
                   : "Sisteme erisecek yeni yoneticiyi kaydedin."}
               </p>
+              <div className="mt-4 inline-flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <img src={medicanaLogo} alt="Medicana Saglik Grubu" className="h-6 w-auto" />
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">Envanter Takip</p>
+                  <p className="text-xs text-slate-500">Medicana kurumsal yonetim paneli</p>
+                </div>
+              </div>
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-4">
