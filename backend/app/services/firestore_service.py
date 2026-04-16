@@ -120,8 +120,10 @@ def sanitize_asset_status(value: str | None) -> str:
     normalized = normalize_text(value)
     mapping = {
         "aktif": "Aktif",
+        "kullanilabilir": "Aktif",
         "arizali": "Arizali",
         "ariza": "Arizali",
+        "bakimda": "Arizali",
         "hurda": "Hurda",
     }
     return mapping.get(normalized, "Aktif")
@@ -285,28 +287,51 @@ class FirestoreService:
         mapped_columns: dict[str, str] = {}
         for column in frame.columns:
             normalized = normalize_text(column)
-            if normalized in {
-                "demirbas_id",
-                "urun_adi",
-                "seri_no",
-                "kategori",
-                "marka",
-                "model",
-                "marka_model",
-                "durum",
-                "lokasyon",
-                "eklenme_tarihi",
-            }:
-                mapped_columns[column] = normalized
+            aliases = {
+                "demirbas_id": "demirbas_id",
+                "lighthouse_otomatik_olusturulan_kod": "demirbas_id",
+                "urun_adi": "urun_adi",
+                "urun": "urun_adi",
+                "ad": "urun_adi",
+                "model": "urun_adi",
+                "seri_no": "seri_no",
+                "seri_numarasi": "seri_no",
+                "kategori": "kategori",
+                "kategori_agaci": "kategori_agaci",
+                "marka": "marka",
+                "model": "model",
+                "marka_model": "marka_model",
+                "durum": "durum",
+                "lokasyon": "lokasyon",
+                "konum": "lokasyon",
+                "sube": "sube",
+                "eklenme_tarihi": "eklenme_tarihi",
+                "olusturma_tarihi": "eklenme_tarihi",
+                "satin_alma_tarihi_gun_ay_yil": "satin_alma_tarihi",
+                "zimmet": "zimmet",
+            }
+            if normalized in aliases:
+                mapped_columns[column] = aliases[normalized]
 
         normalized_frame = frame.rename(columns=mapped_columns)
         return normalized_frame
+
+    def _resolve_asset_name(self, row: dict[str, Any]) -> str | None:
+        explicit = clean_optional(row.get("urun_adi"))
+        brand = clean_optional(row.get("marka"))
+        model = clean_optional(row.get("model"))
+
+        if explicit and explicit != model:
+            return explicit
+        if brand and model:
+            return f"{brand} {model}"
+        return explicit or model or brand
 
     def import_assets_from_excel(self, content: bytes, user_email: str) -> ImportResult:
         frame = pd.read_excel(BytesIO(content))
         frame = self._map_excel_columns(frame)
 
-        required_columns = {"demirbas_id", "urun_adi"}
+        required_columns = {"demirbas_id"}
         missing = required_columns - set(frame.columns)
         if missing:
             raise ValueError(f"Eksik zorunlu kolonlar: {', '.join(sorted(missing))}")
@@ -320,11 +345,11 @@ class FirestoreService:
         for index, raw_row in frame.iterrows():
             row = raw_row.to_dict()
             asset_id = clean_optional(row.get("demirbas_id"))
-            name = clean_optional(row.get("urun_adi"))
+            name = self._resolve_asset_name(row)
 
             if not asset_id or not name:
                 skipped_count += 1
-                warnings.append(f"Satir {index + 2}: Demirbas ID veya Urun Adi bos, kayit atlandi.")
+                warnings.append(f"Satir {index + 2}: Demirbas ID veya urun adi uretilemedi, kayit atlandi.")
                 continue
 
             location = clean_optional(row.get("lokasyon")) or "Genel Merkez"
@@ -333,7 +358,12 @@ class FirestoreService:
                     f"Satir {index + 2}: Lokasyon '{location}' olarak geldi, kurala uygun sekilde 'Genel Merkez' kullanildi."
                 )
 
-            added_at = parse_datetime(row.get("eklenme_tarihi")) or now_utc()
+            added_at = (
+                parse_datetime(row.get("eklenme_tarihi"))
+                or parse_datetime(row.get("satin_alma_tarihi"))
+                or now_utc()
+            )
+            category = clean_optional(row.get("kategori")) or clean_optional(row.get("kategori_agaci"))
             doc_ref = self.db.collection(ASSETS).document(asset_id)
             exists = doc_ref.get().exists
 
@@ -341,7 +371,7 @@ class FirestoreService:
                 "asset_id": asset_id,
                 "name": name,
                 "serial_number": clean_optional(row.get("seri_no")),
-                "category": clean_optional(row.get("kategori")),
+                "category": category,
                 "brand_model": self._compose_brand_model(row),
                 "status": sanitize_asset_status(clean_optional(row.get("durum"))),
                 "location": "Genel Merkez",
