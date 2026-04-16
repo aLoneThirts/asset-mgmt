@@ -1,15 +1,18 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import {
+  createUserWithEmailAndPassword,
   onAuthStateChanged,
   signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  updateProfile,
   signOut,
+  updateProfile,
 } from "firebase/auth";
 import type { User } from "firebase/auth";
-import { auth } from "@/lib/firebase";
 import toast from "react-hot-toast";
+
+import { auth } from "@/lib/firebase";
+import { logSession } from "@/lib/firestore";
 
 interface AuthContextValue {
   user: User | null;
@@ -22,11 +25,10 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser]         = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(null);
   const [isLoading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Firebase auth state'i yalnızca BURADA, tek bir yerde dinliyoruz.
     const unsub = onAuthStateChanged(auth, (firebaseUser) => {
       setUser(firebaseUser);
       setLoading(false);
@@ -37,14 +39,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (email: string, password: string) => {
     try {
       await signInWithEmailAndPassword(auth, email, password);
-      toast.success("Hoş geldiniz!");
+      await logSession("login").catch(() => undefined);
+      toast.success("Hos geldiniz!");
     } catch (err: unknown) {
       const code = (err as { code?: string }).code;
       const msg =
-        code === "auth/invalid-credential" ? "Email veya şifre hatalı." :
-        code === "auth/user-not-found"     ? "Kullanıcı bulunamadı."   :
-        code === "auth/wrong-password"     ? "Şifre hatalı."           :
-        "Giriş başarısız.";
+        code === "auth/invalid-credential" ? "E-posta veya sifre hatali." :
+        code === "auth/user-not-found" ? "Kullanici bulunamadi." :
+        code === "auth/wrong-password" ? "Sifre hatali." :
+        "Giris basarisiz.";
       toast.error(msg);
       throw err;
     }
@@ -54,13 +57,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const result = await createUserWithEmailAndPassword(auth, email, password);
       await updateProfile(result.user, { displayName: name });
-      toast.success("Hesap oluşturuldu!");
+      await logSession("register").catch(() => undefined);
+      toast.success("Hesap olusturuldu!");
     } catch (err: unknown) {
       const code = (err as { code?: string }).code;
       const msg =
-        code === "auth/email-already-in-use" ? "Bu email zaten kayıtlı." :
-        code === "auth/weak-password"        ? "Şifre en az 6 karakter olmalı." :
-        "Kayıt başarısız.";
+        code === "auth/email-already-in-use" ? "Bu e-posta zaten kayitli." :
+        code === "auth/weak-password" ? "Sifre en az 6 karakter olmali." :
+        "Kayit basarisiz.";
       toast.error(msg);
       throw err;
     }
@@ -68,7 +72,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = async () => {
     await signOut(auth);
-    toast.success("Çıkış yapıldı.");
+    toast.success("Cikis yapildi.");
   };
 
   return (
@@ -80,6 +84,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 export function useAuth() {
   const ctx = useContext(AuthContext);
-  if (!ctx) throw new Error("useAuth must be used inside <AuthProvider>");
+  if (!ctx) {
+    throw new Error("useAuth must be used inside AuthProvider.");
+  }
   return ctx;
 }

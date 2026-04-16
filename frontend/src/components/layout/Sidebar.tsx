@@ -1,59 +1,81 @@
 import { NavLink } from "react-router-dom";
-import { useAuth } from "@/context/AuthContext";
 import {
-  LayoutDashboard, Package, Wrench, BarChart3,
-  FileSpreadsheet, ScrollText, LogOut,
+  BarChart3,
+  Bell,
+  FileSpreadsheet,
+  LayoutDashboard,
+  LogOut,
+  Package,
+  ScrollText,
+  Wrench,
 } from "lucide-react";
 
+import { useAuth } from "@/context/AuthContext";
+import { useNotifications } from "@/hooks/useNotifications";
+
 const links = [
-  { to: "/dashboard",   icon: LayoutDashboard,  label: "Dashboard"   },
-  { to: "/assets",      icon: Package,           label: "Demirbaşlar" },
-  { to: "/maintenance", icon: Wrench,            label: "Arıza Takip" },
-  { to: "/stock",       icon: BarChart3,         label: "Stok"        },
-  { to: "/import",      icon: FileSpreadsheet,   label: "Excel İmport"},
-  { to: "/logs",        icon: ScrollText,        label: "Loglar"      },
+  { to: "/dashboard", icon: LayoutDashboard, label: "Dashboard" },
+  { to: "/assets", icon: Package, label: "Demirbaslar" },
+  { to: "/maintenance", icon: Wrench, label: "Ariza Takip" },
+  { to: "/stock", icon: BarChart3, label: "Stok" },
+  { to: "/import", icon: FileSpreadsheet, label: "Excel Import" },
+  { to: "/logs", icon: ScrollText, label: "Loglar" },
 ];
 
 export function Sidebar() {
   const { user, logout } = useAuth();
+  const { count } = useNotifications();
 
   return (
-    <aside className="w-60 min-h-screen bg-slate-900 flex flex-col">
-      {/* Logo */}
-      <div className="px-6 py-5 border-b border-slate-700">
-        <p className="text-white font-bold text-lg">AssetTrack</p>
-        <p className="text-slate-400 text-xs mt-0.5">Demirbaş Yönetimi</p>
+    <aside className="flex min-h-screen w-72 flex-col border-r border-slate-800 bg-slate-950">
+      <div className="border-b border-slate-800 px-6 py-5">
+        <p className="text-lg font-bold text-white">AssetTrack</p>
+        <p className="mt-1 text-xs text-slate-400">Kurumsal demirbas ve envanter merkezi</p>
       </div>
 
-      {/* Nav */}
-      <nav className="flex-1 px-3 py-4 space-y-1">
+      <div className="border-b border-slate-800 px-4 py-4">
+        <div className="rounded-2xl bg-slate-900 p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <p className="text-sm font-semibold text-white">{user?.displayName || "Admin Kullanici"}</p>
+              <p className="mt-1 text-xs text-slate-400">{user?.email}</p>
+            </div>
+            <div className="rounded-xl bg-slate-800 p-2 text-slate-300">
+              <Bell size={16} />
+            </div>
+          </div>
+          <div className="rounded-xl border border-amber-400/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
+            Aktif bildirim: <strong>{count}</strong>
+          </div>
+        </div>
+      </div>
+
+      <nav className="flex-1 space-y-1 px-3 py-4">
         {links.map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}
             className={({ isActive }) =>
-              `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+              `flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition ${
                 isActive
-                  ? "bg-brand-600 text-white"
-                  : "text-slate-400 hover:text-white hover:bg-slate-800"
+                  ? "bg-brand-600 text-white shadow-lg shadow-brand-900/30"
+                  : "text-slate-400 hover:bg-slate-900 hover:text-white"
               }`
             }
           >
             <Icon size={18} />
-            {label}
+            <span>{label}</span>
           </NavLink>
         ))}
       </nav>
 
-      {/* User & logout */}
-      <div className="px-4 py-4 border-t border-slate-700">
-        <p className="text-slate-400 text-xs truncate mb-3">{user?.email}</p>
+      <div className="border-t border-slate-800 p-4">
         <button
           onClick={logout}
-          className="flex items-center gap-2 text-sm text-slate-400 hover:text-white transition-colors"
+          className="flex w-full items-center justify-center gap-2 rounded-xl border border-slate-700 px-4 py-3 text-sm font-medium text-slate-300 transition hover:border-slate-600 hover:bg-slate-900 hover:text-white"
         >
           <LogOut size={16} />
-          Çıkış Yap
+          Cikis Yap
         </button>
       </div>
     </aside>

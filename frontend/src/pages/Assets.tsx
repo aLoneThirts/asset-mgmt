@@ -1,124 +1,203 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useAuth } from "@/context/AuthContext";
-import {
-  getAssets, createAsset, updateAsset, deleteAsset,
-} from "@/lib/firestore";
-import type { Asset } from "@/lib/firestore";
+import { Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import toast from "react-hot-toast";
-import { Plus, Search, Trash2, Pencil, X } from "lucide-react";
+
+import {
+  createAsset,
+  deleteAsset,
+  getAssets,
+  updateAsset,
+  type Asset,
+  type AssetPayload,
+} from "@/lib/firestore";
 
 const STATUS_COLORS: Record<string, string> = {
-  "Aktif":   "bg-green-100 text-green-700",
-  "Arızalı": "bg-red-100 text-red-700",
-  "Hurda":   "bg-slate-100 text-slate-600",
+  Aktif: "bg-green-100 text-green-700",
+  Arizali: "bg-red-100 text-red-700",
+  Hurda: "bg-slate-100 text-slate-700",
 };
 
 export function AssetsPage() {
-  const { user } = useAuth();
   const qc = useQueryClient();
-  const [search, setSearch]     = useState("");
-  const [filterStatus, setFS]   = useState("");
-  const [filterCat, setFC]      = useState("");
-  const [modal, setModal]       = useState<"add" | "edit" | null>(null);
+  const [search, setSearch] = useState("");
+  const [filterStatus, setFilterStatus] = useState("");
+  const [filterCategory, setFilterCategory] = useState("");
+  const [sortBy, setSortBy] = useState<"asset_id" | "name" | "status">("name");
+  const [modal, setModal] = useState<"add" | "edit" | null>(null);
   const [selected, setSelected] = useState<Asset | null>(null);
 
-  const { data: assets = [], isLoading } = useQuery<Asset[]>({
+  const { data: assets = [], isLoading } = useQuery({
     queryKey: ["assets"],
     queryFn: getAssets,
   });
 
-  const handleDelete = async (asset: Asset) => {
-    if (!confirm("Silmek istediğinize emin misiniz?")) return;
+  const categories = useMemo(
+    () => [...new Set(assets.map((item) => item.category).filter(Boolean))] as string[],
+    [assets],
+  );
+
+  const filtered = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase();
+    const items = assets.filter((item) => {
+      const matchSearch =
+        !normalizedSearch ||
+        item.name.toLowerCase().includes(normalizedSearch) ||
+        item.asset_id.toLowerCase().includes(normalizedSearch);
+      const matchStatus = !filterStatus || item.status === filterStatus;
+      const matchCategory = !filterCategory || item.category === filterCategory;
+      return matchSearch && matchStatus && matchCategory;
+    });
+
+    return [...items].sort((left, right) => {
+      if (sortBy === "asset_id") return left.asset_id.localeCompare(right.asset_id);
+      if (sortBy === "status") return left.status.localeCompare(right.status);
+      return left.name.localeCompare(right.name);
+    });
+  }, [assets, filterCategory, filterStatus, search, sortBy]);
+
+  async function handleDelete(asset: Asset) {
+    if (!confirm(`${asset.asset_id} numarali demirbas silinsin mi?`)) return;
+
     try {
-      await deleteAsset(asset.id, asset.name, user!.email!);
+      await deleteAsset(asset.id);
+      toast.success("Demirbas silindi.");
       qc.invalidateQueries({ queryKey: ["assets"] });
-      toast.success("Silindi.");
-    } catch {
-      toast.error("Silinemedi.");
+      qc.invalidateQueries({ queryKey: ["dashboard"] });
+      qc.invalidateQueries({ queryKey: ["logs"] });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Silme islemi basarisiz.");
     }
-  };
-
-  const filtered = assets.filter(a => {
-    const matchSearch = !search || a.name.toLowerCase().includes(search.toLowerCase()) || a.id.toLowerCase().includes(search.toLowerCase());
-    const matchStatus = !filterStatus || a.status === filterStatus;
-    const matchCat    = !filterCat || a.category === filterCat;
-    return matchSearch && matchStatus && matchCat;
-  });
-
-  const categories = [...new Set(assets.map(a => a.category).filter(Boolean))];
+  }
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-slate-900">Demirbaşlar</h1>
-        <button onClick={() => setModal("add")}
-          className="flex items-center gap-2 bg-brand-600 hover:bg-brand-700 text-white px-4 py-2 rounded-xl text-sm font-medium transition">
-          <Plus size={16} /> Demirbaş Ekle
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Demirbas Listesi</h1>
+          <p className="mt-1 text-sm text-slate-500">
+            Tum kayitlar sabit olarak Genel Merkez lokasyonunda tutulur.
+          </p>
+        </div>
+
+        <button
+          onClick={() => setModal("add")}
+          className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-700"
+        >
+          <Plus size={16} />
+          Demirbas Ekle
         </button>
       </div>
 
-      <div className="flex flex-wrap gap-3">
-        <div className="relative">
-          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Ara (isim / ID)..."
-            className="pl-9 pr-4 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 w-64" />
+      <div className="rounded-2xl border border-slate-100 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:flex-wrap">
+          <div className="relative min-w-[240px] flex-1">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder="ID veya urun adi ara..."
+              className="w-full rounded-xl border border-slate-200 py-2 pl-9 pr-4 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+            />
+          </div>
+
+          <select
+            value={filterStatus}
+            onChange={(event) => setFilterStatus(event.target.value)}
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+          >
+            <option value="">Tum durumlar</option>
+            <option value="Aktif">Aktif</option>
+            <option value="Arizali">Arizali</option>
+            <option value="Hurda">Hurda</option>
+          </select>
+
+          <select
+            value={filterCategory}
+            onChange={(event) => setFilterCategory(event.target.value)}
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+          >
+            <option value="">Tum kategoriler</option>
+            {categories.map((category) => (
+              <option key={category} value={category}>
+                {category}
+              </option>
+            ))}
+          </select>
+
+          <select
+            value={sortBy}
+            onChange={(event) => setSortBy(event.target.value as typeof sortBy)}
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+          >
+            <option value="name">Ada gore sirala</option>
+            <option value="asset_id">ID'ye gore sirala</option>
+            <option value="status">Duruma gore sirala</option>
+          </select>
+
+          {(search || filterStatus || filterCategory) && (
+            <button
+              onClick={() => {
+                setSearch("");
+                setFilterStatus("");
+                setFilterCategory("");
+              }}
+              className="inline-flex items-center gap-1 text-sm text-slate-500 transition hover:text-slate-700"
+            >
+              <X size={14} />
+              Temizle
+            </button>
+          )}
         </div>
-        <select value={filterStatus} onChange={e => setFS(e.target.value)}
-          className="border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
-          <option value="">Tüm Durumlar</option>
-          <option>Aktif</option><option>Arızalı</option><option>Hurda</option>
-        </select>
-        <select value={filterCat} onChange={e => setFC(e.target.value)}
-          className="border border-slate-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
-          <option value="">Tüm Kategoriler</option>
-          {categories.map(c => <option key={c as string}>{c as string}</option>)}
-        </select>
-        {(search || filterStatus || filterCat) && (
-          <button onClick={() => { setSearch(""); setFS(""); setFC(""); }}
-            className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700">
-            <X size={14} /> Temizle
-          </button>
-        )}
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+      <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
         {isLoading ? (
-          <div className="p-8 text-center text-sm text-slate-400">Yükleniyor...</div>
+          <div className="p-8 text-center text-sm text-slate-400">Kayitlar yukleniyor...</div>
         ) : filtered.length === 0 ? (
-          <div className="p-8 text-center text-sm text-slate-400">Demirbaş bulunamadı.</div>
+          <div className="p-8 text-center text-sm text-slate-400">Eslesen demirbas bulunamadi.</div>
         ) : (
           <table className="w-full text-sm">
-            <thead className="bg-slate-50 text-slate-600 uppercase text-xs">
+            <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
-                {["ID","Ürün Adı","Seri No","Kategori","Marka/Model","Durum","Lokasyon",""].map(h => (
-                  <th key={h} className="px-4 py-3 text-left font-semibold tracking-wide">{h}</th>
+                {["Demirbas ID", "Urun Adi", "Seri No", "Kategori", "Marka / Model", "Durum", "Lokasyon", ""].map((header) => (
+                  <th key={header} className="px-4 py-3 font-semibold">
+                    {header}
+                  </th>
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-50">
-              {filtered.map(asset => (
-                <tr key={asset.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-4 py-3 font-mono text-xs text-slate-500">{asset.id}</td>
+            <tbody className="divide-y divide-slate-100">
+              {filtered.map((asset) => (
+                <tr key={asset.id} className="transition hover:bg-slate-50">
+                  <td className="px-4 py-3 font-mono text-xs text-slate-600">{asset.asset_id}</td>
                   <td className="px-4 py-3 font-medium text-slate-900">{asset.name}</td>
-                  <td className="px-4 py-3 text-slate-500">{asset.serial_no ?? "—"}</td>
-                  <td className="px-4 py-3 text-slate-500">{asset.category ?? "—"}</td>
-                  <td className="px-4 py-3 text-slate-500">{[asset.brand, asset.model].filter(Boolean).join(" / ") || "—"}</td>
+                  <td className="px-4 py-3 text-slate-600">{asset.serial_no || "-"}</td>
+                  <td className="px-4 py-3 text-slate-600">{asset.category || "-"}</td>
+                  <td className="px-4 py-3 text-slate-600">{asset.brand_model || "-"}</td>
                   <td className="px-4 py-3">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${STATUS_COLORS[asset.status] ?? "bg-slate-100 text-slate-600"}`}>
+                    <span className={`rounded-full px-2 py-1 text-xs font-semibold ${STATUS_COLORS[asset.status] || "bg-slate-100 text-slate-700"}`}>
                       {asset.status}
                     </span>
                   </td>
-                  <td className="px-4 py-3 text-slate-500">{asset.location}</td>
+                  <td className="px-4 py-3 text-slate-600">{asset.location}</td>
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => { setSelected(asset); setModal("edit"); }}
-                        className="p-1.5 hover:bg-slate-100 rounded-lg transition" title="Düzenle">
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        onClick={() => {
+                          setSelected(asset);
+                          setModal("edit");
+                        }}
+                        className="rounded-lg p-2 transition hover:bg-slate-100"
+                        title="Duzenle"
+                      >
                         <Pencil size={14} className="text-slate-500" />
                       </button>
-                      <button onClick={() => handleDelete(asset)}
-                        className="p-1.5 hover:bg-red-50 rounded-lg transition" title="Sil">
+                      <button
+                        onClick={() => void handleDelete(asset)}
+                        className="rounded-lg p-2 transition hover:bg-red-50"
+                        title="Sil"
+                      >
                         <Trash2 size={14} className="text-red-500" />
                       </button>
                     </div>
@@ -134,75 +213,137 @@ export function AssetsPage() {
         <AssetModal
           mode={modal}
           asset={selected}
-          userEmail={user!.email!}
-          onClose={() => { setModal(null); setSelected(null); }}
-          onSaved={() => { qc.invalidateQueries({ queryKey: ["assets"] }); setModal(null); setSelected(null); }}
+          onClose={() => {
+            setModal(null);
+            setSelected(null);
+          }}
+          onSaved={() => {
+            qc.invalidateQueries({ queryKey: ["assets"] });
+            qc.invalidateQueries({ queryKey: ["dashboard"] });
+            qc.invalidateQueries({ queryKey: ["logs"] });
+            setModal(null);
+            setSelected(null);
+          }}
         />
       )}
     </div>
   );
 }
 
-function AssetModal({ mode, asset, userEmail, onClose, onSaved }: {
-  mode: "add" | "edit"; asset: Asset | null;
-  userEmail: string; onClose: () => void; onSaved: () => void;
+function AssetModal({
+  mode,
+  asset,
+  onClose,
+  onSaved,
+}: {
+  mode: "add" | "edit";
+  asset: Asset | null;
+  onClose: () => void;
+  onSaved: () => void;
 }) {
-  const [form, setForm] = useState({
-    name: asset?.name ?? "", serial_no: asset?.serial_no ?? "",
-    category: asset?.category ?? "", brand: asset?.brand ?? "",
-    model: asset?.model ?? "", status: asset?.status ?? "Aktif",
+  const [form, setForm] = useState<AssetPayload>({
+    asset_id: asset?.asset_id ?? "",
+    name: asset?.name ?? "",
+    serial_no: asset?.serial_no ?? "",
+    category: asset?.category ?? "",
+    brand_model: asset?.brand_model ?? "",
+    status: asset?.status ?? "Aktif",
+    added_at: asset?.added_at ?? "",
   });
   const [loading, setLoading] = useState(false);
 
-  const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
+  function setValue<K extends keyof AssetPayload>(key: K, value: AssetPayload[K]) {
+    setForm((current) => ({ ...current, [key]: value }));
+  }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
     setLoading(true);
+
     try {
       if (mode === "add") {
-        await createAsset({ ...form, location: "Genel Merkez" }, userEmail);
-      } else {
-        await updateAsset(asset!.id, form, userEmail);
+        await createAsset(form);
+        toast.success("Demirbas eklendi.");
+      } else if (asset) {
+        await updateAsset(asset.id, form);
+        toast.success("Demirbas guncellendi.");
       }
-      toast.success(mode === "add" ? "Demirbaş eklendi." : "Güncellendi.");
       onSaved();
-    } catch {
-      toast.error("İşlem başarısız.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Islem basarisiz.");
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-          <h2 className="font-semibold text-slate-900">{mode === "add" ? "Demirbaş Ekle" : "Demirbaş Düzenle"}</h2>
-          <button onClick={onClose} className="p-1 hover:bg-slate-100 rounded-lg"><X size={18} /></button>
-        </div>
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          <Field label="Ürün Adı *" value={form.name} onChange={v => set("name", v)} required />
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Seri No" value={form.serial_no} onChange={v => set("serial_no", v)} />
-            <Field label="Kategori" value={form.category} onChange={v => set("category", v)} />
-            <Field label="Marka" value={form.brand} onChange={v => set("brand", v)} />
-            <Field label="Model" value={form.model} onChange={v => set("model", v)} />
-          </div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4">
+      <div className="w-full max-w-2xl rounded-2xl bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-slate-100 px-6 py-4">
           <div>
-            <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1.5">Durum</label>
-            <select value={form.status} onChange={e => set("status", e.target.value)}
-              className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500">
-              <option>Aktif</option><option>Arızalı</option><option>Hurda</option>
+            <h2 className="text-lg font-semibold text-slate-900">
+              {mode === "add" ? "Yeni Demirbas" : "Demirbas Duzenle"}
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">Lokasyon sabit olarak Genel Merkez uygulanir.</p>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-2 transition hover:bg-slate-100">
+            <X size={18} />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4 p-6">
+          <div className="grid gap-4 md:grid-cols-2">
+            <Field
+              label="Demirbas ID *"
+              value={form.asset_id}
+              disabled={mode === "edit"}
+              onChange={(value) => setValue("asset_id", value)}
+              required
+            />
+            <Field label="Urun Adi *" value={form.name} onChange={(value) => setValue("name", value)} required />
+            <Field label="Seri No" value={form.serial_no || ""} onChange={(value) => setValue("serial_no", value)} />
+            <Field label="Kategori" value={form.category || ""} onChange={(value) => setValue("category", value)} />
+            <Field
+              label="Marka / Model"
+              value={form.brand_model || ""}
+              onChange={(value) => setValue("brand_model", value)}
+            />
+            <Field
+              label="Eklenme Tarihi"
+              value={form.added_at ? form.added_at.slice(0, 10) : ""}
+              onChange={(value) => setValue("added_at", value ? new Date(value).toISOString() : "")}
+              type="date"
+            />
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+              Durum
+            </label>
+            <select
+              value={form.status}
+              onChange={(event) => setValue("status", event.target.value as AssetPayload["status"])}
+              className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+            >
+              <option value="Aktif">Aktif</option>
+              <option value="Arizali">Arizali</option>
+              <option value="Hurda">Hurda</option>
             </select>
           </div>
+
           <div className="flex gap-3 pt-2">
-            <button type="button" onClick={onClose}
-              className="flex-1 py-2.5 border border-slate-200 rounded-xl text-sm font-medium text-slate-600 hover:bg-slate-50">
-              İptal
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 rounded-xl border border-slate-200 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+            >
+              Iptal
             </button>
-            <button type="submit" disabled={loading}
-              className="flex-1 py-2.5 bg-brand-600 hover:bg-brand-700 text-white rounded-xl text-sm font-medium disabled:opacity-60">
+            <button
+              type="submit"
+              disabled={loading}
+              className="flex-1 rounded-xl bg-brand-600 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-700 disabled:opacity-60"
+            >
               {loading ? "Kaydediliyor..." : "Kaydet"}
             </button>
           </div>
@@ -212,12 +353,32 @@ function AssetModal({ mode, asset, userEmail, onClose, onSaved }: {
   );
 }
 
-function Field({ label, value, onChange, required }: { label: string; value: string; onChange: (v: string) => void; required?: boolean }) {
+function Field({
+  label,
+  value,
+  onChange,
+  required,
+  disabled,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  required?: boolean;
+  disabled?: boolean;
+  type?: "text" | "date";
+}) {
   return (
     <div>
-      <label className="block text-xs font-semibold text-gray-600 uppercase tracking-wide mb-1.5">{label}</label>
-      <input value={value} onChange={e => onChange(e.target.value)} required={required}
-        className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500" />
+      <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600">{label}</label>
+      <input
+        type={type}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        required={required}
+        disabled={disabled}
+        className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200 disabled:cursor-not-allowed disabled:bg-slate-100"
+      />
     </div>
   );
 }
