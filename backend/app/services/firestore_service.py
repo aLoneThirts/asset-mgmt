@@ -270,6 +270,9 @@ class FirestoreService:
     def __init__(self) -> None:
         self.db = get_firestore_client()
 
+    def _list_assets_raw(self) -> list[Asset]:
+        return [document_to_asset(doc) for doc in self.db.collection(ASSETS).stream()]
+
     def _list_personnel_raw(self) -> list[Personnel]:
         return [document_to_personnel(doc) for doc in self.db.collection(PERSONNEL).stream()]
 
@@ -289,7 +292,7 @@ class FirestoreService:
             item.asset_id: item for item in self._list_assignments_raw(active_only=True)
         }
 
-        for asset in self.list_assets():
+        for asset in self._list_assets_raw():
             assigned_name = clean_assignment_name(asset.assigned_to)
             if not assigned_name:
                 continue
@@ -365,8 +368,8 @@ class FirestoreService:
         return [document_to_log(doc) for doc in docs]
 
     def list_assets(self) -> list[Asset]:
-        docs = self.db.collection(ASSETS).stream()
-        assets = [document_to_asset(doc) for doc in docs]
+        self._sync_assignment_directory()
+        assets = self._list_assets_raw()
         active_assignments = {
             item.asset_id: item for item in self._list_assignments_raw(active_only=True)
         }
@@ -379,10 +382,20 @@ class FirestoreService:
         return sorted(assets, key=lambda item: (item.name.lower(), item.asset_id.lower()))
 
     def get_asset(self, asset_id: str) -> Asset:
+        self._sync_assignment_directory()
         doc = self.db.collection(ASSETS).document(asset_id).get()
         if not doc.exists:
             raise KeyError("Asset not found.")
-        return document_to_asset(doc)
+        asset = document_to_asset(doc)
+        current_assignment = next(
+            (item for item in self._list_assignments_raw(active_only=True) if item.asset_id == asset.id),
+            None,
+        )
+        if current_assignment:
+            asset.assigned_to = current_assignment.personnel_name
+            asset.assigned_department = current_assignment.department
+            asset.assignment_id = current_assignment.id
+        return asset
 
     def create_asset(self, payload: AssetCreate, user_email: str) -> Asset:
         doc_ref = self.db.collection(ASSETS).document(payload.asset_id)
