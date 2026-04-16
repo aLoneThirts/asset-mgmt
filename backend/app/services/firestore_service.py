@@ -110,6 +110,15 @@ def clean_optional(value: Any) -> str | None:
     return text or None
 
 
+def clean_assignment_name(value: Any) -> str | None:
+    text = clean_optional(value)
+    if not text:
+        return None
+    if normalize_text(text) in {"-", "yok", "none", "null", "nan", "atanmadi", "atanmamis"}:
+        return None
+    return text
+
+
 def parse_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
@@ -494,6 +503,34 @@ class FirestoreService:
         active_assignments_by_asset[asset.id] = document_to_assignment(assignment_ref.get())
         self._sync_personnel_assignments(personnel.id)
 
+    def _clear_import_assignment(
+        self,
+        asset_id: str,
+        user_email: str,
+        active_assignments_by_asset: dict[str, AssignmentRecord],
+    ) -> None:
+        current_assignment = active_assignments_by_asset.get(asset_id)
+        if current_assignment:
+            self.db.collection(ASSIGNMENTS).document(current_assignment.id).update(
+                {
+                    "returned_at": now_utc(),
+                    "returned_by": user_email,
+                    "is_active": False,
+                    "note": current_assignment.note or "Excel import zimmet temizleme",
+                }
+            )
+            self._sync_personnel_assignments(current_assignment.personnel_id)
+            active_assignments_by_asset.pop(asset_id, None)
+
+        self.db.collection(ASSETS).document(asset_id).update(
+            {
+                "assigned_to": None,
+                "assigned_department": None,
+                "assignment_id": None,
+                "updated_at": now_utc(),
+            }
+        )
+
     def import_assets_from_excel(self, content: bytes, user_email: str) -> ImportResult:
         frame = pd.read_excel(BytesIO(content))
         frame = self._map_excel_columns(frame)
@@ -513,6 +550,7 @@ class FirestoreService:
             item.asset_id: item for item in self.list_assignments(active_only=True)
         }
         assignment_sync_rows: list[tuple[str, str, datetime]] = []
+        assignment_clear_rows: list[str] = []
 
         for index, raw_row in frame.iterrows():
             row = raw_row.to_dict()
@@ -536,7 +574,7 @@ class FirestoreService:
                 or now_utc()
             )
             category = clean_optional(row.get("kategori")) or clean_optional(row.get("kategori_agaci"))
-            zimmet_name = clean_optional(row.get("zimmet"))
+            zimmet_name = clean_assignment_name(row.get("zimmet"))
             doc_ref = self.db.collection(ASSETS).document(asset_id)
             existing_snapshot = doc_ref.get()
             existing = existing_snapshot.to_dict() if existing_snapshot.exists else {}
@@ -552,9 +590,9 @@ class FirestoreService:
                 "added_at": added_at,
                 "created_by": (existing or {}).get("created_by") or user_email,
                 "updated_at": now_utc(),
-                "assigned_to": zimmet_name or (existing or {}).get("assigned_to"),
-                "assigned_department": (existing or {}).get("assigned_department"),
-                "assignment_id": (existing or {}).get("assignment_id"),
+                "assigned_to": zimmet_name,
+                "assigned_department": (existing or {}).get("assigned_department") if zimmet_name else None,
+                "assignment_id": (existing or {}).get("assignment_id") if zimmet_name else None,
             }
 
             batch.set(doc_ref, payload, merge=True)
@@ -565,6 +603,8 @@ class FirestoreService:
 
             if zimmet_name:
                 assignment_sync_rows.append((asset_id, zimmet_name, added_at))
+            elif (existing or {}).get("assignment_id") or (existing or {}).get("assigned_to"):
+                assignment_clear_rows.append(asset_id)
 
         batch.commit()
         for asset_id, zimmet_name, assigned_at in assignment_sync_rows:
@@ -574,6 +614,12 @@ class FirestoreService:
                 assigned_at=assigned_at,
                 user_email=user_email,
                 personnel_cache=personnel_cache,
+                active_assignments_by_asset=active_assignments_by_asset,
+            )
+        for asset_id in assignment_clear_rows:
+            self._clear_import_assignment(
+                asset_id=asset_id,
+                user_email=user_email,
                 active_assignments_by_asset=active_assignments_by_asset,
             )
         self.add_log(
