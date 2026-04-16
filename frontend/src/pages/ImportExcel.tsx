@@ -22,6 +22,7 @@ export function ImportPage() {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   function handleSelect(nextFile: File | undefined) {
     if (!nextFile) return;
@@ -31,6 +32,7 @@ export function ImportPage() {
     }
     setFile(nextFile);
     setResult(null);
+    setErrorMessage(null);
   }
 
   async function handleUpload() {
@@ -40,12 +42,15 @@ export function ImportPage() {
     try {
       const summary = await uploadAssetExcel(file);
       setResult(summary);
+      setErrorMessage(null);
       toast.success("Excel import tamamlandi.");
       qc.invalidateQueries({ queryKey: ["assets"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       qc.invalidateQueries({ queryKey: ["logs"] });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Import islemi basarisiz.");
+      const message = error instanceof Error ? error.message : "Import islemi basarisiz.";
+      setErrorMessage(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -127,6 +132,13 @@ export function ImportPage() {
             </>
           )}
         </button>
+      )}
+
+      {errorMessage && (
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
+          <p className="text-sm font-semibold text-red-900">Import hatasi</p>
+          <p className="mt-1 text-sm text-red-800">{errorMessage}</p>
+        </div>
       )}
 
       {result && (
