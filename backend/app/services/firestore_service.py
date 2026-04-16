@@ -376,7 +376,6 @@ class FirestoreService:
         return [document_to_log(doc) for doc in docs]
 
     def list_assets(self) -> list[Asset]:
-        self._sync_assignment_directory()
         assets = self._list_assets_raw()
         active_assignments = {
             item.asset_id: item for item in self._list_assignments_raw(active_only=True)
@@ -390,7 +389,6 @@ class FirestoreService:
         return sorted(assets, key=lambda item: (item.name.lower(), item.asset_id.lower()))
 
     def get_asset(self, asset_id: str) -> Asset:
-        self._sync_assignment_directory()
         doc = self.db.collection(ASSETS).document(asset_id).get()
         if not doc.exists:
             raise KeyError("Asset not found.")
@@ -507,9 +505,26 @@ class FirestoreService:
     def _get_personnel_cache(self) -> dict[str, Personnel]:
         return {
             normalize_text(item.full_name): item
-            for item in self.list_personnel()
+            for item in self._list_personnel_raw()
             if item.full_name.strip()
         }
+
+    def _rebuild_personnel_assignment_counts(self) -> None:
+        active_counts = Counter(
+            item.personnel_id for item in self._list_assignments_raw(active_only=True) if item.personnel_id
+        )
+        batch = self.db.batch()
+        personnel_items = self._list_personnel_raw()
+        for person in personnel_items:
+            batch.update(
+                self.db.collection(PERSONNEL).document(person.id),
+                {
+                    "active_assignment_count": active_counts.get(person.id, 0),
+                    "updated_at": now_utc(),
+                },
+            )
+        if personnel_items:
+            batch.commit()
 
     def _ensure_import_personnel(
         self,
@@ -567,7 +582,6 @@ class FirestoreService:
                     "updated_at": now_utc(),
                 }
             )
-            self._sync_personnel_assignments(personnel.id)
             return
 
         if current_assignment:
@@ -578,7 +592,6 @@ class FirestoreService:
                     "is_active": False,
                 }
             )
-            self._sync_personnel_assignments(current_assignment.personnel_id)
 
         assignment_ref = self.db.collection(ASSIGNMENTS).document()
         assignment_ref.set(
@@ -606,7 +619,6 @@ class FirestoreService:
             }
         )
         active_assignments_by_asset[asset.id] = document_to_assignment(assignment_ref.get())
-        self._sync_personnel_assignments(personnel.id)
 
     def _clear_import_assignment(
         self,
@@ -624,7 +636,6 @@ class FirestoreService:
                     "note": current_assignment.note or "Excel import zimmet temizleme",
                 }
             )
-            self._sync_personnel_assignments(current_assignment.personnel_id)
             active_assignments_by_asset.pop(asset_id, None)
 
         self.db.collection(ASSETS).document(asset_id).update(
@@ -727,6 +738,7 @@ class FirestoreService:
                 user_email=user_email,
                 active_assignments_by_asset=active_assignments_by_asset,
             )
+        self._rebuild_personnel_assignment_counts()
         self.add_log(
             user_email,
             "excel_import",
@@ -813,7 +825,6 @@ class FirestoreService:
         self.add_log(user_email, "stock_deleted", f"{name} stok kalemi silindi.")
 
     def list_personnel(self) -> list[Personnel]:
-        self._sync_assignment_directory()
         items = self._list_personnel_raw()
         return sorted(items, key=lambda item: item.full_name.lower())
 
@@ -856,7 +867,6 @@ class FirestoreService:
         self.add_log(user_email, "personnel_deleted", f"{name} personel kaydi silindi.")
 
     def list_assignments(self, active_only: bool = False) -> list[AssignmentRecord]:
-        self._sync_assignment_directory()
         items = self._list_assignments_raw(active_only=active_only)
         return sorted(items, key=lambda item: item.assigned_at, reverse=True)
 
