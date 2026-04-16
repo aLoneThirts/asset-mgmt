@@ -118,3 +118,17 @@ class ImportResult(BaseModel):
 
 class SessionLogRequest(BaseModel):
     event: Literal["login", "register"]
+
+
+class AdminUser(BaseModel):
+    uid: str
+    email: str | None = None
+    name: str | None = None
+    is_admin: bool = False
+    disabled: bool = False
+    created_at: datetime | None = None
+    last_sign_in_at: datetime | None = None
+
+
+class AdminRoleUpdate(BaseModel):
+    is_admin: bool

@@ -7,8 +7,10 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from firebase_admin import auth
 
 try:
+    from backend.app.core.config import get_settings
     from backend.app.core.firebase_admin import get_firebase_app
 except ModuleNotFoundError:
+    from app.core.config import get_settings
     from app.core.firebase_admin import get_firebase_app
 
 bearer_scheme = HTTPBearer(auto_error=True)
@@ -19,12 +21,14 @@ class AuthUser:
     uid: str
     email: str
     name: str | None = None
+    is_admin: bool = False
 
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ) -> AuthUser:
     get_firebase_app()
+    settings = get_settings()
 
     token = credentials.credentials
     try:
@@ -46,4 +50,14 @@ def get_current_user(
         uid=decoded["uid"],
         email=email,
         name=decoded.get("name"),
+        is_admin=bool(decoded.get("admin")) or email.lower() == settings.bootstrap_admin_email.lower(),
     )
+
+
+def require_admin(user: AuthUser = Depends(get_current_user)) -> AuthUser:
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bu islem icin admin yetkisi gerekiyor.",
+        )
+    return user

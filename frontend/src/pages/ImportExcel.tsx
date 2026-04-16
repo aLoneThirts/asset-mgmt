@@ -16,6 +16,18 @@ const EXPECTED_COLUMNS = [
   "Eklenme Tarihi",
 ];
 
+const LIGHTHOUSE_COLUMNS = [
+  "Lighthouse Otomatik Olusturulan Kod",
+  "Marka",
+  "Model",
+  "Seri Numarasi",
+  "Kategori",
+  "Kategori Agaci",
+  "Durum",
+  "Konum",
+  "Olusturma Tarihi",
+];
+
 export function ImportPage() {
   const qc = useQueryClient();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -78,6 +90,16 @@ export function ImportPage() {
           Zorunlu alanlar: <strong>Demirbas ID</strong> ve <strong>Urun Adi</strong>. Lokasyon ne gelirse gelsin
           sistem kaydi Genel Merkez olarak sabitler.
         </p>
+        <p className="mt-3 text-xs text-blue-700">
+          Not: Lighthouse export dosyalarindaki kolonlar da destekleniyor. Ornek eslesmeler asagidadir.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {LIGHTHOUSE_COLUMNS.map((column) => (
+            <span key={column} className="rounded-lg bg-white px-2.5 py-1 text-xs font-medium text-blue-800 ring-1 ring-inset ring-blue-200">
+              {column}
+            </span>
+          ))}
+        </div>
       </div>
 
       <div

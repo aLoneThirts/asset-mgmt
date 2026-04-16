@@ -213,6 +213,7 @@ export function AssetsPage() {
         <AssetModal
           mode={modal}
           asset={selected}
+          assets={assets}
           onClose={() => {
             setModal(null);
             setSelected(null);
@@ -233,11 +234,13 @@ export function AssetsPage() {
 function AssetModal({
   mode,
   asset,
+  assets,
   onClose,
   onSaved,
 }: {
   mode: "add" | "edit";
   asset: Asset | null;
+  assets: Asset[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -252,8 +255,55 @@ function AssetModal({
   });
   const [loading, setLoading] = useState(false);
 
+  const productHints = useMemo(() => {
+    const normalizedName = form.name.trim().toLowerCase();
+    if (!normalizedName) return [];
+
+    const ranked = assets
+      .filter((item) => item.id !== asset?.id)
+      .map((item) => {
+        const candidate = item.name.trim().toLowerCase();
+        let score = 0;
+        if (candidate === normalizedName) score += 5;
+        if (candidate.startsWith(normalizedName) || normalizedName.startsWith(candidate)) score += 3;
+        if (candidate.includes(normalizedName) || normalizedName.includes(candidate)) score += 2;
+        return { item, score };
+      })
+      .filter(({ score }) => score > 0)
+      .sort((left, right) => right.score - left.score || left.item.name.localeCompare(right.item.name));
+
+    return ranked.slice(0, 3).map(({ item }) => item);
+  }, [asset?.id, assets, form.name]);
+
+  const suggestedAsset = productHints[0];
+
   function setValue<K extends keyof AssetPayload>(key: K, value: AssetPayload[K]) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  function handleNameChange(value: string) {
+    setForm((current) => {
+      const next = { ...current, name: value };
+      const normalizedName = value.trim().toLowerCase();
+      const match = assets
+        .filter((item) => item.id !== asset?.id)
+        .find((item) => item.name.trim().toLowerCase() === normalizedName);
+
+      if (match) {
+        if (!current.category?.trim()) next.category = match.category ?? "";
+        if (!current.brand_model?.trim()) next.brand_model = match.brand_model ?? "";
+      }
+
+      return next;
+    });
+  }
+
+  function applySuggestion(item: Asset) {
+    setForm((current) => ({
+      ...current,
+      category: item.category ?? current.category ?? "",
+      brand_model: item.brand_model ?? current.brand_model ?? "",
+    }));
   }
 
   async function handleSubmit(event: React.FormEvent) {
@@ -300,7 +350,7 @@ function AssetModal({
               onChange={(value) => setValue("asset_id", value)}
               required
             />
-            <Field label="Urun Adi *" value={form.name} onChange={(value) => setValue("name", value)} required />
+            <Field label="Urun Adi *" value={form.name} onChange={handleNameChange} required />
             <Field label="Seri No" value={form.serial_no || ""} onChange={(value) => setValue("serial_no", value)} />
             <Field label="Kategori" value={form.category || ""} onChange={(value) => setValue("category", value)} />
             <Field
@@ -315,6 +365,25 @@ function AssetModal({
               type="date"
             />
           </div>
+
+          {mode === "add" && suggestedAsset && (
+            <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
+              <p className="text-sm font-semibold text-blue-900">Otomatik onerilen bilgiler</p>
+              <p className="mt-1 text-sm text-blue-800">
+                Benzer urun bulundu: <strong>{suggestedAsset.name}</strong>
+              </p>
+              <p className="mt-2 text-xs text-blue-700">
+                Kategori: {suggestedAsset.category || "-"} · Marka / Model: {suggestedAsset.brand_model || "-"}
+              </p>
+              <button
+                type="button"
+                onClick={() => applySuggestion(suggestedAsset)}
+                className="mt-3 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
+              >
+                Bu bilgileri uygula
+              </button>
+            </div>
+          )}
 
           <div>
             <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600">

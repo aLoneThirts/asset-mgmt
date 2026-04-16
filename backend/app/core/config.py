@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     app_name: str = "Asset Management API"
     app_env: str = Field(default="development", alias="APP_ENV")
     frontend_origin: str = Field(default="http://localhost:5173", alias="FRONTEND_ORIGIN")
+    bootstrap_admin_email: str = Field(default="goktugfuaty@gmail.com", alias="BOOTSTRAP_ADMIN_EMAIL")
 
     firebase_project_id: str | None = Field(default=None, alias="FIREBASE_PROJECT_ID")
     firebase_private_key_id: str | None = Field(default=None, alias="FIREBASE_PRIVATE_KEY_ID")
@@ -38,6 +39,7 @@ class Settings(BaseSettings):
     @field_validator(
         "app_env",
         "frontend_origin",
+        "bootstrap_admin_email",
         "firebase_project_id",
         "firebase_private_key_id",
         "firebase_client_email",

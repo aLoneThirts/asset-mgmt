@@ -1,5 +1,6 @@
 import { NavLink } from "react-router-dom";
 import {
+  ShieldCheck,
   BarChart3,
   Bell,
   FileSpreadsheet,
@@ -20,6 +21,7 @@ const links = [
   { to: "/stock", icon: BarChart3, label: "Stok" },
   { to: "/import", icon: FileSpreadsheet, label: "Excel Import" },
   { to: "/logs", icon: ScrollText, label: "Loglar" },
+  { to: "/admin/users", icon: ShieldCheck, label: "Kullanicilar" },
 ];
 
 export function Sidebar() {

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from datetime import datetime, UTC
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from firebase_admin import auth as firebase_auth
 
 try:
     from backend.app.core.config import get_settings
-    from backend.app.core.security import AuthUser, get_current_user
+    from backend.app.core.security import AuthUser, get_current_user, require_admin
     from backend.app.models.schemas import (
+        AdminRoleUpdate,
+        AdminUser,
         Asset,
         AssetCreate,
         AssetUpdate,
@@ -26,8 +30,10 @@ try:
     from backend.app.services.firestore_service import FirestoreService
 except ModuleNotFoundError:
     from app.core.config import get_settings
-    from app.core.security import AuthUser, get_current_user
+    from app.core.security import AuthUser, get_current_user, require_admin
     from app.models.schemas import (
+        AdminRoleUpdate,
+        AdminUser,
         Asset,
         AssetCreate,
         AssetUpdate,
@@ -229,3 +235,79 @@ def delete_stock(
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return {"ok": True}
+
+
+def _from_millis(value: int | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromtimestamp(value / 1000, tz=UTC)
+
+
+@app.get("/admin/users", response_model=list[AdminUser])
+def list_admin_users(_: AuthUser = Depends(require_admin)) -> list[AdminUser]:
+    users: list[AdminUser] = []
+
+    for user_record in firebase_auth.list_users().iterate_all():
+        claims = user_record.custom_claims or {}
+        users.append(
+            AdminUser(
+                uid=user_record.uid,
+                email=user_record.email,
+                name=user_record.display_name,
+                is_admin=bool(claims.get("admin")) or (
+                    bool(user_record.email)
+                    and user_record.email.lower() == settings.bootstrap_admin_email.lower()
+                ),
+                disabled=user_record.disabled,
+                created_at=_from_millis(user_record.user_metadata.creation_timestamp),
+                last_sign_in_at=_from_millis(user_record.user_metadata.last_sign_in_timestamp),
+            )
+        )
+
+    return sorted(users, key=lambda item: ((item.email or "").lower(), item.uid))
+
+
+@app.patch("/admin/users/{uid}/admin", response_model=AdminUser)
+def update_admin_role(
+    uid: str,
+    payload: AdminRoleUpdate,
+    acting_user: AuthUser = Depends(require_admin),
+    service: FirestoreService = Depends(get_service),
+) -> AdminUser:
+    try:
+        user_record = firebase_auth.get_user(uid)
+    except firebase_auth.UserNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Kullanici bulunamadi.") from exc
+
+    claims = dict(user_record.custom_claims or {})
+
+    if payload.is_admin:
+        claims["admin"] = True
+    else:
+        claims.pop("admin", None)
+
+    firebase_auth.set_custom_user_claims(uid, claims or None)
+    updated_record = firebase_auth.get_user(uid)
+    updated_claims = updated_record.custom_claims or {}
+
+    service.add_log(
+        user=acting_user.email,
+        action="admin-role-updated",
+        detail=(
+            f"{updated_record.email or updated_record.uid} icin admin yetkisi "
+            f"{'verildi' if payload.is_admin else 'kaldirildi'}"
+        ),
+    )
+
+    return AdminUser(
+        uid=updated_record.uid,
+        email=updated_record.email,
+        name=updated_record.display_name,
+        is_admin=bool(updated_claims.get("admin")) or (
+            bool(updated_record.email)
+            and updated_record.email.lower() == settings.bootstrap_admin_email.lower()
+        ),
+        disabled=updated_record.disabled,
+        created_at=_from_millis(updated_record.user_metadata.creation_timestamp),
+        last_sign_in_at=_from_millis(updated_record.user_metadata.last_sign_in_timestamp),
+    )

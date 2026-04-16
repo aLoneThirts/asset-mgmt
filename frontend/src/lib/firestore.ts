@@ -144,6 +144,26 @@ export interface ImportResult {
   warnings: string[];
 }
 
+interface ApiAdminUser {
+  uid: string;
+  email?: string | null;
+  name?: string | null;
+  is_admin: boolean;
+  disabled: boolean;
+  created_at?: string | null;
+  last_sign_in_at?: string | null;
+}
+
+export interface AdminUser {
+  uid: string;
+  email?: string;
+  name?: string;
+  is_admin: boolean;
+  disabled: boolean;
+  created_at?: string;
+  last_sign_in_at?: string;
+}
+
 async function getAuthToken() {
   const user = auth.currentUser;
   if (!user) {
@@ -224,6 +244,18 @@ function mapStock(item: ApiStockItem): StockItem {
     unit: item.unit,
     low_stock: item.low_stock,
     updated_at: item.updated_at ?? undefined,
+  };
+}
+
+function mapAdminUser(item: ApiAdminUser): AdminUser {
+  return {
+    uid: item.uid,
+    email: item.email ?? undefined,
+    name: item.name ?? undefined,
+    is_admin: item.is_admin,
+    disabled: item.disabled,
+    created_at: item.created_at ?? undefined,
+    last_sign_in_at: item.last_sign_in_at ?? undefined,
   };
 }
 
@@ -347,4 +379,17 @@ export async function getDashboard(): Promise<DashboardSummary> {
     recent_logs: data.recent_logs,
     notifications: data.notifications,
   };
+}
+
+export async function getAdminUsers(): Promise<AdminUser[]> {
+  const items = await apiRequest<ApiAdminUser[]>("/admin/users");
+  return items.map(mapAdminUser);
+}
+
+export async function updateAdminRole(uid: string, isAdmin: boolean): Promise<AdminUser> {
+  const item = await apiRequest<ApiAdminUser>(`/admin/users/${uid}/admin`, {
+    method: "PATCH",
+    body: JSON.stringify({ is_admin: isAdmin }),
+  });
+  return mapAdminUser(item);
 }
