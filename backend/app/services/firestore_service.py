@@ -270,6 +270,81 @@ class FirestoreService:
     def __init__(self) -> None:
         self.db = get_firestore_client()
 
+    def _list_personnel_raw(self) -> list[Personnel]:
+        return [document_to_personnel(doc) for doc in self.db.collection(PERSONNEL).stream()]
+
+    def _list_assignments_raw(self, active_only: bool = False) -> list[AssignmentRecord]:
+        items = [document_to_assignment(doc) for doc in self.db.collection(ASSIGNMENTS).stream()]
+        if active_only:
+            items = [item for item in items if item.is_active]
+        return items
+
+    def _sync_assignment_directory(self) -> None:
+        personnel_cache = {
+            normalize_text(item.full_name): item
+            for item in self._list_personnel_raw()
+            if item.full_name.strip()
+        }
+        active_assignments_by_asset = {
+            item.asset_id: item for item in self._list_assignments_raw(active_only=True)
+        }
+
+        for asset in self.list_assets():
+            assigned_name = clean_assignment_name(asset.assigned_to)
+            if not assigned_name:
+                continue
+
+            personnel = self._ensure_import_personnel(assigned_name, personnel_cache)
+            current_assignment = active_assignments_by_asset.get(asset.id)
+
+            if current_assignment:
+                update_payload: dict[str, Any] = {}
+                if normalize_text(current_assignment.personnel_name) != normalize_text(personnel.full_name):
+                    update_payload["personnel_name"] = personnel.full_name
+                    update_payload["personnel_id"] = personnel.id
+                if current_assignment.department != personnel.department:
+                    update_payload["department"] = personnel.department
+                if update_payload:
+                    self.db.collection(ASSIGNMENTS).document(current_assignment.id).update(update_payload)
+                self.db.collection(ASSETS).document(asset.id).update(
+                    {
+                        "assigned_to": personnel.full_name,
+                        "assigned_department": personnel.department,
+                        "assignment_id": current_assignment.id,
+                        "updated_at": now_utc(),
+                    }
+                )
+                self._sync_personnel_assignments(personnel.id)
+                continue
+
+            assignment_ref = self.db.collection(ASSIGNMENTS).document()
+            assigned_at = asset.added_at or now_utc()
+            assignment_ref.set(
+                {
+                    "asset_id": asset.id,
+                    "asset_name": asset.name,
+                    "asset_code": asset.asset_id,
+                    "personnel_id": personnel.id,
+                    "personnel_name": personnel.full_name,
+                    "department": personnel.department,
+                    "note": "Mevcut demirbas kaydindan otomatik senkronize edildi",
+                    "assigned_by": "system",
+                    "assigned_at": assigned_at,
+                    "returned_at": None,
+                    "returned_by": None,
+                    "is_active": True,
+                }
+            )
+            self.db.collection(ASSETS).document(asset.id).update(
+                {
+                    "assigned_to": personnel.full_name,
+                    "assigned_department": personnel.department,
+                    "assignment_id": assignment_ref.id,
+                    "updated_at": now_utc(),
+                }
+            )
+            self._sync_personnel_assignments(personnel.id)
+
     def add_log(self, user: str, action: str, detail: str) -> None:
         self.db.collection(LOGS).add(
             {
@@ -292,6 +367,15 @@ class FirestoreService:
     def list_assets(self) -> list[Asset]:
         docs = self.db.collection(ASSETS).stream()
         assets = [document_to_asset(doc) for doc in docs]
+        active_assignments = {
+            item.asset_id: item for item in self._list_assignments_raw(active_only=True)
+        }
+        for asset in assets:
+            current_assignment = active_assignments.get(asset.id)
+            if current_assignment:
+                asset.assigned_to = current_assignment.personnel_name
+                asset.assigned_department = current_assignment.department
+                asset.assignment_id = current_assignment.id
         return sorted(assets, key=lambda item: (item.name.lower(), item.asset_id.lower()))
 
     def get_asset(self, asset_id: str) -> Asset:
@@ -708,8 +792,8 @@ class FirestoreService:
         self.add_log(user_email, "stock_deleted", f"{name} stok kalemi silindi.")
 
     def list_personnel(self) -> list[Personnel]:
-        docs = self.db.collection(PERSONNEL).stream()
-        items = [document_to_personnel(doc) for doc in docs]
+        self._sync_assignment_directory()
+        items = self._list_personnel_raw()
         return sorted(items, key=lambda item: item.full_name.lower())
 
     def create_personnel(self, payload: PersonnelCreate, user_email: str) -> Personnel:
@@ -751,10 +835,8 @@ class FirestoreService:
         self.add_log(user_email, "personnel_deleted", f"{name} personel kaydi silindi.")
 
     def list_assignments(self, active_only: bool = False) -> list[AssignmentRecord]:
-        docs = self.db.collection(ASSIGNMENTS).stream()
-        items = [document_to_assignment(doc) for doc in docs]
-        if active_only:
-            items = [item for item in items if item.is_active]
+        self._sync_assignment_directory()
+        items = self._list_assignments_raw(active_only=active_only)
         return sorted(items, key=lambda item: item.assigned_at, reverse=True)
 
     def create_assignment(self, payload: AssignmentCreate, user_email: str) -> AssignmentRecord:
@@ -835,7 +917,7 @@ class FirestoreService:
 
     def _sync_personnel_assignments(self, personnel_id: str) -> None:
         active_count = sum(
-            1 for item in self.list_assignments(active_only=True) if item.personnel_id == personnel_id
+            1 for item in self._list_assignments_raw(active_only=True) if item.personnel_id == personnel_id
         )
         self.db.collection(PERSONNEL).document(personnel_id).update(
             {
