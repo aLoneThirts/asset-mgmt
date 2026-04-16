@@ -16,22 +16,17 @@ import {
 
 import { useAuth } from "@/context/AuthContext";
 import { getDashboard, type ChartDatum, type Log, type Notification, type StockItem, type TrendDatum } from "@/lib/firestore";
-import { QueryErrorState } from "@/components/ui/QueryErrorState";
 
 const PIE_COLORS = ["#0f766e", "#f97316", "#94a3b8", "#2563eb", "#16a34a", "#eab308"];
 
 export function DashboardPage() {
   const { user } = useAuth();
-  const { data, error, isLoading, refetch } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ["dashboard"],
     queryFn: getDashboard,
   });
 
   if (isLoading) return <LoadingSkeleton />;
-
-  if (error) {
-    return <QueryErrorState error={error} onRetry={() => void refetch()} title="Dashboard verileri alinamadi" />;
-  }
 
   const stats = [
     { label: "Toplam Demirbas", value: data?.total_assets ?? 0, icon: Package, color: "bg-blue-50 text-blue-600" },

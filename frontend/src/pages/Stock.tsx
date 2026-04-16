@@ -4,14 +4,13 @@ import { AlertTriangle, Plus, X } from "lucide-react";
 import toast from "react-hot-toast";
 
 import { createStock, deleteStock, getStock, updateStock, type StockItem } from "@/lib/firestore";
-import { QueryErrorState } from "@/components/ui/QueryErrorState";
 
 export function StockPage() {
   const qc = useQueryClient();
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<StockItem | null>(null);
 
-  const { data: items = [], error, isLoading, refetch } = useQuery({
+  const { data: items = [], isLoading } = useQuery({
     queryKey: ["stock"],
     queryFn: getStock,
   });
@@ -56,8 +55,6 @@ export function StockPage() {
           Stok Ekle
         </button>
       </div>
-
-      {error && <QueryErrorState error={error} onRetry={() => void refetch()} title="Stok verileri alinamadi" />}
 
       <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
         {isLoading ? (

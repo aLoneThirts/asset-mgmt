@@ -1,10 +1,9 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { getLogs, type Log } from "@/lib/firestore";
-import { QueryErrorState } from "@/components/ui/QueryErrorState";
 
 export function LogsPage() {
-  const { data: logs = [], error, isLoading, refetch } = useQuery<Log[]>({
+  const { data: logs = [], isLoading } = useQuery<Log[]>({
     queryKey: ["logs"],
     queryFn: () => getLogs(200),
   });
@@ -15,8 +14,6 @@ export function LogsPage() {
         <h1 className="text-2xl font-bold text-slate-900">Sistem Loglari</h1>
         <p className="mt-1 text-sm text-slate-500">Girisler, importlar ve tum kritik islemler burada listelenir.</p>
       </div>
-
-      {error && <QueryErrorState error={error} onRetry={() => void refetch()} title="Log kayitlari alinamadi" />}
 
       <div className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
         {isLoading ? (
