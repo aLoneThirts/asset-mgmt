@@ -1,6 +1,7 @@
 from functools import lru_cache
 
 from pydantic import Field
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,6 +34,28 @@ class Settings(BaseSettings):
     )
     firebase_universe_domain: str | None = Field(default=None, alias="FIREBASE_UNIVERSE_DOMAIN")
     firebase_storage_bucket: str | None = Field(default=None, alias="FIREBASE_STORAGE_BUCKET")
+
+    @field_validator(
+        "app_env",
+        "frontend_origin",
+        "firebase_project_id",
+        "firebase_private_key_id",
+        "firebase_client_email",
+        "firebase_client_id",
+        "firebase_auth_uri",
+        "firebase_token_uri",
+        "firebase_auth_provider_cert_url",
+        "firebase_client_cert_url",
+        "firebase_universe_domain",
+        "firebase_storage_bucket",
+        mode="before",
+    )
+    @classmethod
+    def strip_string_fields(cls, value: str | None) -> str | None:
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
 
 
 @lru_cache

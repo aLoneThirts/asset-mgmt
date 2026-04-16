@@ -23,7 +23,7 @@ def get_firebase_app() -> firebase_admin.App:
                 "private_key_id": settings.firebase_private_key_id,
                 "client_email": settings.firebase_client_email,
                 "client_id": settings.firebase_client_id,
-                "private_key": settings.firebase_private_key.replace("\\n", "\n"),
+                "private_key": settings.firebase_private_key.strip().replace("\\n", "\n"),
                 "auth_uri": settings.firebase_auth_uri,
                 "token_uri": settings.firebase_token_uri,
                 "auth_provider_x509_cert_url": settings.firebase_auth_provider_cert_url,

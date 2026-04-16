@@ -150,7 +150,7 @@ async function getAuthToken() {
     throw new Error("Oturum bulunamadi.");
   }
 
-  return user.getIdToken();
+  return user.getIdToken(true);
 }
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
