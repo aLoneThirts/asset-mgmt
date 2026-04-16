@@ -390,6 +390,110 @@ class FirestoreService:
             return f"{brand} {model}"
         return explicit or model or brand
 
+    def _get_personnel_cache(self) -> dict[str, Personnel]:
+        return {
+            normalize_text(item.full_name): item
+            for item in self.list_personnel()
+            if item.full_name.strip()
+        }
+
+    def _ensure_import_personnel(
+        self,
+        full_name: str,
+        cache: dict[str, Personnel],
+    ) -> Personnel:
+        key = normalize_text(full_name)
+        existing = cache.get(key)
+        if existing:
+            return existing
+
+        doc_ref = self.db.collection(PERSONNEL).document()
+        now = now_utc()
+        doc_ref.set(
+            {
+                "full_name": full_name,
+                "email": None,
+                "department": None,
+                "title": None,
+                "location": "Genel Merkez",
+                "employee_code": None,
+                "active_assignment_count": 0,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        personnel = document_to_personnel(doc_ref.get())
+        cache[key] = personnel
+        return personnel
+
+    def _sync_import_assignment(
+        self,
+        asset_id: str,
+        personnel_name: str,
+        assigned_at: datetime,
+        user_email: str,
+        personnel_cache: dict[str, Personnel],
+        active_assignments_by_asset: dict[str, AssignmentRecord],
+    ) -> None:
+        personnel = self._ensure_import_personnel(personnel_name, personnel_cache)
+        asset_ref = self.db.collection(ASSETS).document(asset_id)
+        asset_snapshot = asset_ref.get()
+        if not asset_snapshot.exists:
+            return
+
+        asset = document_to_asset(asset_snapshot)
+        current_assignment = active_assignments_by_asset.get(asset.id)
+
+        if current_assignment and normalize_text(current_assignment.personnel_name) == normalize_text(personnel.full_name):
+            asset_ref.update(
+                {
+                    "assigned_to": personnel.full_name,
+                    "assigned_department": personnel.department,
+                    "assignment_id": current_assignment.id,
+                    "updated_at": now_utc(),
+                }
+            )
+            self._sync_personnel_assignments(personnel.id)
+            return
+
+        if current_assignment:
+            self.db.collection(ASSIGNMENTS).document(current_assignment.id).update(
+                {
+                    "returned_at": now_utc(),
+                    "returned_by": user_email,
+                    "is_active": False,
+                }
+            )
+            self._sync_personnel_assignments(current_assignment.personnel_id)
+
+        assignment_ref = self.db.collection(ASSIGNMENTS).document()
+        assignment_ref.set(
+            {
+                "asset_id": asset.id,
+                "asset_name": asset.name,
+                "asset_code": asset.asset_id,
+                "personnel_id": personnel.id,
+                "personnel_name": personnel.full_name,
+                "department": personnel.department,
+                "note": "Excel import zimmet senkronizasyonu",
+                "assigned_by": user_email,
+                "assigned_at": assigned_at,
+                "returned_at": None,
+                "returned_by": None,
+                "is_active": True,
+            }
+        )
+        asset_ref.update(
+            {
+                "assigned_to": personnel.full_name,
+                "assigned_department": personnel.department,
+                "assignment_id": assignment_ref.id,
+                "updated_at": now_utc(),
+            }
+        )
+        active_assignments_by_asset[asset.id] = document_to_assignment(assignment_ref.get())
+        self._sync_personnel_assignments(personnel.id)
+
     def import_assets_from_excel(self, content: bytes, user_email: str) -> ImportResult:
         frame = pd.read_excel(BytesIO(content))
         frame = self._map_excel_columns(frame)
@@ -404,6 +508,11 @@ class FirestoreService:
         updated_count = 0
         skipped_count = 0
         batch = self.db.batch()
+        personnel_cache = self._get_personnel_cache()
+        active_assignments_by_asset = {
+            item.asset_id: item for item in self.list_assignments(active_only=True)
+        }
+        assignment_sync_rows: list[tuple[str, str, datetime]] = []
 
         for index, raw_row in frame.iterrows():
             row = raw_row.to_dict()
@@ -427,6 +536,7 @@ class FirestoreService:
                 or now_utc()
             )
             category = clean_optional(row.get("kategori")) or clean_optional(row.get("kategori_agaci"))
+            zimmet_name = clean_optional(row.get("zimmet"))
             doc_ref = self.db.collection(ASSETS).document(asset_id)
             existing_snapshot = doc_ref.get()
             existing = existing_snapshot.to_dict() if existing_snapshot.exists else {}
@@ -442,7 +552,7 @@ class FirestoreService:
                 "added_at": added_at,
                 "created_by": (existing or {}).get("created_by") or user_email,
                 "updated_at": now_utc(),
-                "assigned_to": (existing or {}).get("assigned_to"),
+                "assigned_to": zimmet_name or (existing or {}).get("assigned_to"),
                 "assigned_department": (existing or {}).get("assigned_department"),
                 "assignment_id": (existing or {}).get("assignment_id"),
             }
@@ -453,7 +563,19 @@ class FirestoreService:
             else:
                 imported_count += 1
 
+            if zimmet_name:
+                assignment_sync_rows.append((asset_id, zimmet_name, added_at))
+
         batch.commit()
+        for asset_id, zimmet_name, assigned_at in assignment_sync_rows:
+            self._sync_import_assignment(
+                asset_id=asset_id,
+                personnel_name=zimmet_name,
+                assigned_at=assigned_at,
+                user_email=user_email,
+                personnel_cache=personnel_cache,
+                active_assignments_by_asset=active_assignments_by_asset,
+            )
         self.add_log(
             user_email,
             "excel_import",
