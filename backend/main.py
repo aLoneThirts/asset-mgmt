@@ -102,7 +102,10 @@ def get_dashboard(
     _: AuthUser = Depends(get_current_user),
     service: FirestoreService = Depends(get_service),
 ) -> DashboardSummary:
-    return service.get_dashboard()
+    try:
+        return service.get_dashboard()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/logs", response_model=list[LogEntry])
@@ -111,7 +114,10 @@ def list_logs(
     _: AuthUser = Depends(get_current_user),
     service: FirestoreService = Depends(get_service),
 ) -> list[LogEntry]:
-    return service.list_logs(limit_count=min(max(limit, 1), 300))
+    try:
+        return service.list_logs(limit_count=min(max(limit, 1), 300))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/assets", response_model=list[Asset])
@@ -119,7 +125,10 @@ def list_assets(
     _: AuthUser = Depends(get_current_user),
     service: FirestoreService = Depends(get_service),
 ) -> list[Asset]:
-    return service.list_assets()
+    try:
+        return service.list_assets()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/assets", response_model=Asset, status_code=201)
@@ -176,6 +185,8 @@ async def import_assets(
         return service.import_assets_from_excel(content, user.email)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/maintenance", response_model=list[MaintenanceRecord])
@@ -183,7 +194,10 @@ def list_maintenance(
     _: AuthUser = Depends(get_current_user),
     service: FirestoreService = Depends(get_service),
 ) -> list[MaintenanceRecord]:
-    return service.list_maintenance()
+    try:
+        return service.list_maintenance()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/maintenance", response_model=MaintenanceRecord, status_code=201)
@@ -216,7 +230,10 @@ def list_stock(
     _: AuthUser = Depends(get_current_user),
     service: FirestoreService = Depends(get_service),
 ) -> list[StockItem]:
-    return service.list_stock()
+    try:
+        return service.list_stock()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/stock", response_model=StockItem, status_code=201)
@@ -259,7 +276,10 @@ def list_personnel(
     _: AuthUser = Depends(get_current_user),
     service: FirestoreService = Depends(get_service),
 ) -> list[Personnel]:
-    return service.list_personnel()
+    try:
+        return service.list_personnel()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/personnel", response_model=Personnel, status_code=201)
@@ -305,7 +325,10 @@ def list_assignments(
     _: AuthUser = Depends(get_current_user),
     service: FirestoreService = Depends(get_service),
 ) -> list[AssignmentRecord]:
-    return service.list_assignments(active_only=active_only)
+    try:
+        return service.list_assignments(active_only=active_only)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/assignments", response_model=AssignmentRecord, status_code=201)
@@ -342,7 +365,10 @@ def get_report_summary(
     _: AuthUser = Depends(get_current_user),
     service: FirestoreService = Depends(get_service),
 ) -> ReportSummary:
-    return service.get_report_summary()
+    try:
+        return service.get_report_summary()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/reports/export.xlsx")
@@ -350,7 +376,10 @@ def export_report_workbook(
     _: AuthUser = Depends(get_current_user),
     service: FirestoreService = Depends(get_service),
 ) -> StreamingResponse:
-    content = service.export_report_workbook()
+    try:
+        content = service.export_report_workbook()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return StreamingResponse(
         iter([content]),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -363,7 +392,10 @@ def export_assignments_csv(
     _: AuthUser = Depends(get_current_user),
     service: FirestoreService = Depends(get_service),
 ) -> StreamingResponse:
-    content = service.export_assignments_csv()
+    try:
+        content = service.export_assignments_csv()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return StreamingResponse(
         iter([content]),
         media_type="text/csv; charset=utf-8",

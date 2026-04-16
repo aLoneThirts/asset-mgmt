@@ -10,6 +10,7 @@ import re
 from typing import Any
 
 import pandas as pd
+from google.api_core.exceptions import ResourceExhausted
 from firebase_admin import firestore
 
 try:
@@ -279,13 +280,13 @@ class FirestoreService:
         self.db = get_firestore_client()
 
     def _list_assets_raw(self) -> list[Asset]:
-        return [document_to_asset(doc) for doc in self.db.collection(ASSETS).stream()]
+        return [document_to_asset(doc) for doc in self._read_collection(ASSETS)]
 
     def _list_personnel_raw(self) -> list[Personnel]:
-        return [document_to_personnel(doc) for doc in self.db.collection(PERSONNEL).stream()]
+        return [document_to_personnel(doc) for doc in self._read_collection(PERSONNEL)]
 
     def _list_assignments_raw(self, active_only: bool = False) -> list[AssignmentRecord]:
-        items = [document_to_assignment(doc) for doc in self.db.collection(ASSIGNMENTS).stream()]
+        items = [document_to_assignment(doc) for doc in self._read_collection(ASSIGNMENTS)]
         if active_only:
             items = [item for item in items if item.is_active]
         return items
@@ -366,14 +367,27 @@ class FirestoreService:
             }
         )
 
+    def _read_collection(self, collection_name: str) -> list[firestore.DocumentSnapshot]:
+        try:
+            return list(self.db.collection(collection_name).stream())
+        except ResourceExhausted as exc:
+            raise RuntimeError(
+                "Firestore kotasi asildi. Bir sure sonra tekrar deneyin veya Firebase plan/kota ayarini yukseltin."
+            ) from exc
+
     def list_logs(self, limit_count: int = 100) -> list[LogEntry]:
-        docs = (
-            self.db.collection(LOGS)
-            .order_by("date", direction=firestore.Query.DESCENDING)
-            .limit(limit_count)
-            .stream()
-        )
-        return [document_to_log(doc) for doc in docs]
+        try:
+            docs = (
+                self.db.collection(LOGS)
+                .order_by("date", direction=firestore.Query.DESCENDING)
+                .limit(limit_count)
+                .stream()
+            )
+            return [document_to_log(doc) for doc in docs]
+        except ResourceExhausted as exc:
+            raise RuntimeError(
+                "Firestore kotasi asildi. Bir sure sonra tekrar deneyin veya Firebase plan/kota ayarini yukseltin."
+            ) from exc
 
     def list_assets(self) -> list[Asset]:
         assets = self._list_assets_raw()
@@ -795,7 +809,7 @@ class FirestoreService:
         return document_to_maintenance(doc_ref.get())
 
     def list_stock(self) -> list[StockItem]:
-        docs = self.db.collection(STOCK).stream()
+        docs = self._read_collection(STOCK)
         items = [document_to_stock(doc) for doc in docs]
         return sorted(items, key=lambda item: item.name.lower())
 
