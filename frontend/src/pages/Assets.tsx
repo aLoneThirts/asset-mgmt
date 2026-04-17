@@ -8,6 +8,7 @@ import { Pagination } from "@/components/ui/Pagination";
 import {
   createAssignment,
   createAsset,
+  createPersonnel,
   deleteAsset,
   getAssets,
   getPersonnel,
@@ -303,8 +304,8 @@ function AssetModal({
     status: asset?.status ?? "Aktif",
     added_at: asset?.added_at ?? "",
   });
-  const [assignOnCreate, setAssignOnCreate] = useState(false);
   const [assignmentPersonnelId, setAssignmentPersonnelId] = useState("");
+  const [assignmentName, setAssignmentName] = useState("");
   const [assignmentNote, setAssignmentNote] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -366,13 +367,28 @@ function AssetModal({
     try {
       if (mode === "add") {
         const created = await createAsset(form);
-        if (assignOnCreate) {
-          if (!assignmentPersonnelId) {
-            throw new Error("Otomatik zimmet icin personel seciniz.");
+        let assigneeId = assignmentPersonnelId;
+        const typedAssigneeName = assignmentName.trim();
+
+        if (!assigneeId && typedAssigneeName) {
+          const existingPersonnel = personnel.find(
+            (item) => item.full_name.trim().toLowerCase() === typedAssigneeName.toLowerCase(),
+          );
+          if (existingPersonnel) {
+            assigneeId = existingPersonnel.id;
+          } else {
+            const createdPersonnel = await createPersonnel({
+              full_name: typedAssigneeName,
+              location: "Genel Merkez",
+            });
+            assigneeId = createdPersonnel.id;
           }
+        }
+
+        if (assigneeId) {
           const assignment = await createAssignment({
             asset_id: created.id,
-            personnel_id: assignmentPersonnelId,
+            personnel_id: assigneeId,
             note: assignmentNote,
           });
           toast.success("Demirbas eklendi, zimmet atandi ve form hazirlandi.");
@@ -469,48 +485,54 @@ function AssetModal({
 
           {mode === "add" && (
             <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4">
-              <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-emerald-900">
-                <input
-                  type="checkbox"
-                  checked={assignOnCreate}
-                  onChange={(event) => setAssignOnCreate(event.target.checked)}
-                  className="h-4 w-4 rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500"
-                />
-                Demirbasi eklerken zimmet ata ve formu otomatik olustur
-              </label>
+              <p className="text-sm font-semibold text-emerald-900">Zimmet (Isim)</p>
+              <p className="mt-1 text-xs text-emerald-700">
+                Buradan isim secerseniz/yazarsaniz demirbas kaydi zimmetli olusur.
+              </p>
 
-              {assignOnCreate && (
-                <div className="mt-3 space-y-3">
-                  <div>
-                    <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600">
-                      Personel
-                    </label>
-                    <select
-                      value={assignmentPersonnelId}
-                      onChange={(event) => setAssignmentPersonnelId(event.target.value)}
-                      className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
-                    >
-                      <option value="">Seciniz...</option>
-                      {personnel.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.full_name} {item.department ? `- ${item.department}` : ""}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600">
-                      Zimmet Notu
-                    </label>
-                    <textarea
-                      value={assignmentNote}
-                      onChange={(event) => setAssignmentNote(event.target.value)}
-                      rows={2}
-                      className="w-full resize-none rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
-                    />
-                  </div>
+              <div className="mt-3 space-y-3">
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Mevcut Personel
+                  </label>
+                  <select
+                    value={assignmentPersonnelId}
+                    onChange={(event) => setAssignmentPersonnelId(event.target.value)}
+                    className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                  >
+                    <option value="">Seciniz (zimmetsiz birakmak icin bos birakin)...</option>
+                    {personnel.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.full_name} {item.department ? `- ${item.department}` : ""}
+                      </option>
+                    ))}
+                  </select>
                 </div>
-              )}
+
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Veya Yeni Zimmet Ismi
+                  </label>
+                  <input
+                    value={assignmentName}
+                    onChange={(event) => setAssignmentName(event.target.value)}
+                    placeholder="Ornek: Goktug Yetkin"
+                    className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                    Zimmet Notu
+                  </label>
+                  <textarea
+                    value={assignmentNote}
+                    onChange={(event) => setAssignmentNote(event.target.value)}
+                    rows={2}
+                    className="w-full resize-none rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                  />
+                </div>
+              </div>
             </div>
           )}
 
@@ -527,7 +549,7 @@ function AssetModal({
               disabled={loading}
               className="flex-1 rounded-xl bg-brand-600 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-700 disabled:opacity-60"
             >
-              {loading ? "Kaydediliyor..." : mode === "add" && assignOnCreate ? "Kaydet + Zimmet Formu" : "Kaydet"}
+              {loading ? "Kaydediliyor..." : mode === "add" && (assignmentPersonnelId || assignmentName.trim()) ? "Kaydet + Zimmet Formu" : "Kaydet"}
             </button>
           </div>
         </form>
