@@ -35,7 +35,7 @@ export function AssignmentFormPrintPage() {
 
   useEffect(() => {
     const previousTitle = document.title;
-    document.title = "Zimmet Teslim Formu";
+    document.title = "";
     return () => {
       document.title = previousTitle;
     };
@@ -83,7 +83,7 @@ export function AssignmentFormPrintPage() {
       <style>{`
         @page {
           size: A4;
-          margin: 10mm;
+          margin: 0;
         }
         @media print {
           .no-print {
