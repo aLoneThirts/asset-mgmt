@@ -318,17 +318,36 @@ export interface ReportSummary {
   exported_at: string;
 }
 
-async function getAuthToken() {
+async function getAuthToken(forceRefresh = false) {
   const user = auth.currentUser;
   if (!user) {
     throw new Error("Oturum bulunamadi.");
   }
 
-  return user.getIdToken(true);
+  return user.getIdToken(forceRefresh);
 }
 
-async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = await getAuthToken();
+async function readApiErrorMessage(response: Response, fallback: string): Promise<string> {
+  let message = `${fallback} (HTTP ${response.status}).`;
+  try {
+    const contentType = response.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const data = (await response.json()) as { detail?: string };
+      message = data.detail || message;
+    } else {
+      const text = (await response.text()).trim();
+      if (text) {
+        message = text.slice(0, 240);
+      }
+    }
+  } catch {
+    // no-op
+  }
+  return message;
+}
+
+async function apiRequest<T>(path: string, init?: RequestInit, forceRefresh = false): Promise<T> {
+  const token = await getAuthToken(forceRefresh);
   const headers = new Headers(init?.headers ?? {});
   headers.set("Authorization", `Bearer ${token}`);
 
@@ -336,27 +355,21 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers,
+    });
+  } catch {
+    throw new Error("Sunucuya baglanilamadi. Internet baglantinizi kontrol edip tekrar deneyin.");
+  }
 
   if (!response.ok) {
-    let message = "Bir hata olustu.";
-    try {
-      const contentType = response.headers.get("content-type") || "";
-      if (contentType.includes("application/json")) {
-        const data = (await response.json()) as { detail?: string };
-        message = data.detail || message;
-      } else {
-        const text = (await response.text()).trim();
-        if (text) {
-          message = text.slice(0, 240);
-        }
-      }
-    } catch {
-      // no-op
+    if (response.status === 401 && !forceRefresh) {
+      return apiRequest<T>(path, init, true);
     }
+    const message = await readApiErrorMessage(response, "Istek basarisiz");
     throw new Error(message);
   }
 
@@ -367,22 +380,24 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   return (await response.json()) as T;
 }
 
-async function apiDownload(path: string): Promise<Blob> {
-  const token = await getAuthToken();
-  const response = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
+async function apiDownload(path: string, forceRefresh = false): Promise<Blob> {
+  const token = await getAuthToken(forceRefresh);
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  } catch {
+    throw new Error("Sunucuya baglanilamadi. Internet baglantinizi kontrol edip tekrar deneyin.");
+  }
 
   if (!response.ok) {
-    let message = "Dosya indirilemedi.";
-    try {
-      const data = (await response.json()) as { detail?: string };
-      message = data.detail || message;
-    } catch {
-      // no-op
+    if (response.status === 401 && !forceRefresh) {
+      return apiDownload(path, true);
     }
+    const message = await readApiErrorMessage(response, "Dosya indirilemedi");
     throw new Error(message);
   }
 
