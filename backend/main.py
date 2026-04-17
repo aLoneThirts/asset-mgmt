@@ -73,7 +73,10 @@ app = FastAPI(title=settings.app_name)
 
 @lru_cache
 def get_service() -> FirestoreService:
-    return FirestoreService()
+    try:
+        return FirestoreService()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 app.add_middleware(
     CORSMiddleware,

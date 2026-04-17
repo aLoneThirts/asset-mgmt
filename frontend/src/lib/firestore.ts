@@ -344,8 +344,16 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     let message = "Bir hata olustu.";
     try {
-      const data = (await response.json()) as { detail?: string };
-      message = data.detail || message;
+      const contentType = response.headers.get("content-type") || "";
+      if (contentType.includes("application/json")) {
+        const data = (await response.json()) as { detail?: string };
+        message = data.detail || message;
+      } else {
+        const text = (await response.text()).trim();
+        if (text) {
+          message = text.slice(0, 240);
+        }
+      }
     } catch {
       // no-op
     }

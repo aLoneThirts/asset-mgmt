@@ -391,23 +391,40 @@ class FirestoreService:
                 return
             candidates.append(candidate)
 
-        add_candidate(bucket_name)
-
         if bucket_name:
             if bucket_name.endswith(".firebasestorage.app"):
                 add_candidate(bucket_name.replace(".firebasestorage.app", ".appspot.com"))
+                add_candidate(bucket_name)
             elif bucket_name.endswith(".appspot.com"):
+                add_candidate(bucket_name)
                 add_candidate(bucket_name.replace(".appspot.com", ".firebasestorage.app"))
+            else:
+                add_candidate(bucket_name)
+        else:
+            add_candidate(bucket_name)
 
         if project_id:
-            add_candidate(f"{project_id}.firebasestorage.app")
             add_candidate(f"{project_id}.appspot.com")
+            add_candidate(f"{project_id}.firebasestorage.app")
 
         return candidates
 
-    def _get_cloud_blob(self):
+    def _ordered_bucket_candidates(self) -> list[str]:
+        ordered: list[str] = []
+        if self._cloud_bucket_name:
+            ordered.append(self._cloud_bucket_name)
+        for candidate in self._cloud_bucket_candidates:
+            if candidate not in ordered:
+                ordered.append(candidate)
+        return ordered
+
+    def _get_cloud_blob(self, bucket_name: str | None = None):
         if not self._cloud_sync_enabled:
             return None
+        if bucket_name:
+            app = get_firebase_app()
+            bucket = firebase_storage.bucket(name=bucket_name, app=app)
+            return bucket.blob(self._cloud_blob_name)
         last_error: Exception | None = None
         app = get_firebase_app()
         for bucket_name in self._cloud_bucket_candidates:
@@ -442,38 +459,50 @@ class FirestoreService:
             return
         self._last_cloud_pull_at = now
 
-        blob = self._get_cloud_blob()
-        if not blob:
-            if self._requires_durable_storage:
-                raise RuntimeError(
-                    "Kalici depolama baglantisi kurulamadi. FIREBASE_STORAGE_BUCKET ayarini kontrol edin."
-                )
-            return
-
         temp_path = f"{self.database_path}.download"
-        try:
-            blob.reload()
-            generation = int(blob.generation) if blob.generation else None
-            if not force and generation is not None and generation == self._cloud_generation:
-                return
-            blob.download_to_filename(temp_path)
+        last_error: Exception | None = None
+        for bucket_name in self._ordered_bucket_candidates():
             try:
-                self.conn.close()
-            except Exception:
-                pass
-            os.replace(temp_path, self.database_path)
-            self._open_connection()
-            self._cloud_generation = generation
-        except Exception as exc:
-            if os.path.exists(temp_path):
+                blob = self._get_cloud_blob(bucket_name=bucket_name)
+                if not blob:
+                    continue
+                blob.reload()
+                generation = int(blob.generation) if blob.generation else None
+                if (
+                    not force
+                    and generation is not None
+                    and generation == self._cloud_generation
+                    and bucket_name == self._cloud_bucket_name
+                ):
+                    return
+                blob.download_to_filename(temp_path)
                 try:
-                    os.remove(temp_path)
+                    self.conn.close()
                 except Exception:
                     pass
-            if self._is_cloud_object_missing(exc):
+                os.replace(temp_path, self.database_path)
+                self._open_connection()
+                self._cloud_generation = generation
+                self._cloud_bucket_name = bucket_name
                 return
-            if self._requires_durable_storage:
-                raise RuntimeError("Kalici veri senkronizasyonu basarisiz oldu. Lutfen tekrar deneyin.") from exc
+            except Exception as exc:
+                last_error = exc
+                if os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except Exception:
+                        pass
+                if self._is_cloud_bucket_missing(exc):
+                    continue
+                if self._is_cloud_object_missing(exc):
+                    self._cloud_bucket_name = bucket_name
+                    return
+                if self._requires_durable_storage:
+                    raise RuntimeError("Kalici veri senkronizasyonu basarisiz oldu. Lutfen tekrar deneyin.") from exc
+                return
+
+        if self._requires_durable_storage and last_error is not None:
+            raise RuntimeError("Kalici depolama bucket bulunamadi. Firebase Storage bucket adini kontrol edin.") from last_error
 
     def _is_cloud_generation_conflict(self, exc: Exception) -> bool:
         message = str(exc).lower()
@@ -491,14 +520,22 @@ class FirestoreService:
         message = str(exc).lower()
         class_name = exc.__class__.__name__.lower()
         code = str(getattr(exc, "code", "")).strip()
-        if "bucket" in message and "not" in message:
-            return False
         return (
             code == "404"
             or "404" in message
             or "notfound" in class_name
-            or "not found" in message
             or "no such object" in message
+            or "object" in message and "not found" in message
+        )
+
+    def _is_cloud_bucket_missing(self, exc: Exception) -> bool:
+        message = str(exc).lower()
+        class_name = exc.__class__.__name__.lower()
+        return (
+            "specified bucket does not exist" in message
+            or ("bucket" in message and "not found" in message)
+            or ("bucket" in message and "does not exist" in message)
+            or ("notfound" in class_name and "bucket" in message)
         )
 
     def _sync_to_cloud(self) -> None:
@@ -506,40 +543,46 @@ class FirestoreService:
             return
         if not self._cloud_dirty:
             return
-        blob = self._get_cloud_blob()
-        if not blob:
-            if self._requires_durable_storage:
-                raise RuntimeError(
-                    "Kalici depolama baglantisi kurulamadi. FIREBASE_STORAGE_BUCKET ayarini kontrol edin."
-                )
-            return
+        last_error: Exception | None = None
+        for bucket_name in self._ordered_bucket_candidates():
+            try:
+                blob = self._get_cloud_blob(bucket_name=bucket_name)
+                if not blob:
+                    continue
 
-        try:
-            if self._cloud_generation is not None:
-                blob.upload_from_filename(
-                    self.database_path,
-                    content_type="application/x-sqlite3",
-                    if_generation_match=self._cloud_generation,
-                )
-            else:
-                blob.upload_from_filename(
-                    self.database_path,
-                    content_type="application/x-sqlite3",
-                )
-            blob.reload()
-            self._cloud_generation = int(blob.generation) if blob.generation else self._cloud_generation
-            self._cloud_dirty = False
-            return
-        except Exception as exc:
-            if self._is_cloud_generation_conflict(exc):
-                self._last_cloud_pull_at = None
-                try:
-                    self._sync_from_cloud(force=True)
-                    self._cloud_dirty = False
-                except Exception:
-                    pass
-                raise RuntimeError("Veri baska bir oturum tarafindan degistirildi. Lutfen islemi tekrar deneyin.") from exc
-            raise RuntimeError("Veri senkronizasyonu basarisiz oldu. Lutfen tekrar deneyin.") from exc
+                use_generation_match = self._cloud_generation is not None and bucket_name == self._cloud_bucket_name
+                if use_generation_match:
+                    blob.upload_from_filename(
+                        self.database_path,
+                        content_type="application/x-sqlite3",
+                        if_generation_match=self._cloud_generation,
+                    )
+                else:
+                    blob.upload_from_filename(
+                        self.database_path,
+                        content_type="application/x-sqlite3",
+                    )
+                blob.reload()
+                self._cloud_bucket_name = bucket_name
+                self._cloud_generation = int(blob.generation) if blob.generation else self._cloud_generation
+                self._cloud_dirty = False
+                return
+            except Exception as exc:
+                last_error = exc
+                if self._is_cloud_bucket_missing(exc):
+                    continue
+                if self._is_cloud_generation_conflict(exc):
+                    self._last_cloud_pull_at = None
+                    try:
+                        self._sync_from_cloud(force=True)
+                        self._cloud_dirty = False
+                    except Exception:
+                        pass
+                    raise RuntimeError("Veri baska bir oturum tarafindan degistirildi. Lutfen islemi tekrar deneyin.") from exc
+                raise RuntimeError("Veri senkronizasyonu basarisiz oldu. Lutfen tekrar deneyin.") from exc
+
+        if self._requires_durable_storage and last_error is not None:
+            raise RuntimeError("Kalici depolama bucket bulunamadi. Firebase Storage bucket adini kontrol edin.") from last_error
 
     def _begin_bulk_write(self) -> None:
         with self._lock:
