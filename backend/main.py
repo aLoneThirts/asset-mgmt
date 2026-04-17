@@ -18,9 +18,13 @@ try:
         AssetCreate,
         AssetUpdate,
         AssignmentCreate,
+        AssignmentFormDocument,
         AssignmentRecord,
         AssignmentReturn,
         DashboardSummary,
+        ExitReportCreate,
+        ExitReportDetail,
+        ExitReportRecord,
         ImportFileRecord,
         ImportResult,
         LogEntry,
@@ -47,9 +51,13 @@ except ModuleNotFoundError:
         AssetCreate,
         AssetUpdate,
         AssignmentCreate,
+        AssignmentFormDocument,
         AssignmentRecord,
         AssignmentReturn,
         DashboardSummary,
+        ExitReportCreate,
+        ExitReportDetail,
+        ExitReportRecord,
         ImportFileRecord,
         ImportResult,
         LogEntry,
@@ -403,6 +411,61 @@ def return_assignment(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/documents/assignment/{assignment_id}", response_model=AssignmentFormDocument)
+def get_assignment_form_document(
+    assignment_id: str,
+    _: AuthUser = Depends(get_current_user),
+    service: FirestoreService = Depends(get_service),
+) -> AssignmentFormDocument:
+    try:
+        return service.get_assignment_form_document(assignment_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/documents/exit-reports", response_model=list[ExitReportRecord])
+def list_exit_reports(
+    limit: int = 100,
+    personnel_id: str | None = None,
+    _: AuthUser = Depends(get_current_user),
+    service: FirestoreService = Depends(get_service),
+) -> list[ExitReportRecord]:
+    try:
+        return service.list_exit_reports(limit_count=min(max(limit, 1), 300), personnel_id=personnel_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/documents/exit-reports", response_model=ExitReportDetail, status_code=201)
+def create_exit_report(
+    payload: ExitReportCreate,
+    user: AuthUser = Depends(get_current_user),
+    service: FirestoreService = Depends(get_service),
+) -> ExitReportDetail:
+    try:
+        return service.create_exit_report(payload, user.email)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/documents/exit-reports/{report_id}", response_model=ExitReportDetail)
+def get_exit_report(
+    report_id: str,
+    _: AuthUser = Depends(get_current_user),
+    service: FirestoreService = Depends(get_service),
+) -> ExitReportDetail:
+    try:
+        return service.get_exit_report(report_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

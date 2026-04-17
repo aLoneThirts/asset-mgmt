@@ -30,10 +30,15 @@ try:
         AssetCreate,
         AssetUpdate,
         AssignmentCreate,
+        AssignmentFormDocument,
         AssignmentRecord,
         AssignmentReturn,
         ChartDatum,
         DashboardSummary,
+        ExitReportAsset,
+        ExitReportCreate,
+        ExitReportDetail,
+        ExitReportRecord,
         ImportFileRecord,
         ImportResult,
         LogEntry,
@@ -58,10 +63,15 @@ except ModuleNotFoundError:
         AssetCreate,
         AssetUpdate,
         AssignmentCreate,
+        AssignmentFormDocument,
         AssignmentRecord,
         AssignmentReturn,
         ChartDatum,
         DashboardSummary,
+        ExitReportAsset,
+        ExitReportCreate,
+        ExitReportDetail,
+        ExitReportRecord,
         ImportFileRecord,
         ImportResult,
         LogEntry,
@@ -345,6 +355,62 @@ def row_to_import_file(row: sqlite3.Row) -> ImportFileRecord:
         warning_count=int(row["warning_count"] or 0),
         status=row["status"] or "completed",
         error_message=row["error_message"],
+    )
+
+
+def parse_exit_report_assets(value: Any) -> list[ExitReportAsset]:
+    if value is None:
+        return []
+    payload: Any
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return []
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            return []
+    elif isinstance(value, list):
+        payload = value
+    else:
+        return []
+
+    items: list[ExitReportAsset] = []
+    for entry in payload:
+        if not isinstance(entry, dict):
+            continue
+        assigned_at = from_db_datetime(entry.get("assigned_at"))
+        if not assigned_at:
+            continue
+        items.append(
+            ExitReportAsset(
+                assignment_id=str(entry.get("assignment_id") or ""),
+                asset_id=str(entry.get("asset_id") or ""),
+                asset_code=str(entry.get("asset_code") or ""),
+                asset_name=str(entry.get("asset_name") or ""),
+                serial_number=clean_optional(entry.get("serial_number")),
+                brand_model=clean_optional(entry.get("brand_model")),
+                assigned_at=assigned_at,
+                returned_at=from_db_datetime(entry.get("returned_at")),
+                is_active=bool(entry.get("is_active")),
+            )
+        )
+    return items
+
+
+def row_to_exit_report_record(row: sqlite3.Row) -> ExitReportRecord:
+    return ExitReportRecord(
+        id=row["id"],
+        personnel_id=row["personnel_id"],
+        personnel_name=row["personnel_name"],
+        department=row["department"],
+        title=row["title"],
+        employee_code=row["employee_code"],
+        created_by=row["created_by"] or "",
+        created_at=from_db_datetime(row["created_at"]) or now_utc(),
+        meeting_date=from_db_datetime(row["meeting_date"]) or now_utc(),
+        note=row["note"],
+        asset_count=int(row["asset_count"] or 0),
     )
 
 
@@ -876,6 +942,21 @@ class FirestoreService:
             error_message TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS exit_reports (
+            id TEXT PRIMARY KEY,
+            personnel_id TEXT NOT NULL,
+            personnel_name TEXT NOT NULL,
+            department TEXT,
+            title TEXT,
+            employee_code TEXT,
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            meeting_date TEXT NOT NULL,
+            note TEXT,
+            asset_count INTEGER NOT NULL DEFAULT 0,
+            assets_json TEXT NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_assets_name ON assets(name);
         CREATE INDEX IF NOT EXISTS idx_logs_date ON logs(date);
         CREATE INDEX IF NOT EXISTS idx_maintenance_date ON maintenance(date);
@@ -883,6 +964,8 @@ class FirestoreService:
         CREATE INDEX IF NOT EXISTS idx_assignments_personnel_active ON assignments(personnel_id, is_active);
         CREATE INDEX IF NOT EXISTS idx_import_files_uploaded_at ON import_files(uploaded_at DESC);
         CREATE INDEX IF NOT EXISTS idx_import_files_hash_status ON import_files(file_hash, status);
+        CREATE INDEX IF NOT EXISTS idx_exit_reports_created_at ON exit_reports(created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_exit_reports_personnel ON exit_reports(personnel_id, created_at DESC);
         """
         with self._lock:
             self.conn.executescript(schema)
@@ -1854,6 +1937,138 @@ class FirestoreService:
         self._sync_personnel_assignments(assignment.personnel_id)
         self.add_log(user_email, "assignment_returned", f"{assignment.asset_code} zimmeti iade alindi.")
         return row_to_assignment(self._query_one("SELECT * FROM assignments WHERE id = ?", (assignment_id,)))
+
+    def get_assignment_form_document(self, assignment_id: str) -> AssignmentFormDocument:
+        assignment_row = self._query_one("SELECT * FROM assignments WHERE id = ?", (assignment_id,))
+        if not assignment_row:
+            raise KeyError("Assignment not found.")
+        assignment = row_to_assignment(assignment_row)
+
+        asset_row = self._query_one(
+            "SELECT * FROM assets WHERE id = ? OR asset_id = ? LIMIT 1",
+            (assignment.asset_id, assignment.asset_code),
+        )
+        personnel_row = self._query_one("SELECT * FROM personnel WHERE id = ? LIMIT 1", (assignment.personnel_id,))
+        personnel = row_to_personnel(personnel_row) if personnel_row else None
+
+        return AssignmentFormDocument(
+            assignment_id=assignment.id,
+            asset_id=assignment.asset_id,
+            asset_name=assignment.asset_name,
+            asset_code=assignment.asset_code,
+            serial_number=asset_row["serial_number"] if asset_row else None,
+            brand_model=asset_row["brand_model"] if asset_row else None,
+            assigned_by=assignment.assigned_by,
+            assigned_at=assignment.assigned_at,
+            personnel_id=assignment.personnel_id,
+            personnel_name=personnel.full_name if personnel else assignment.personnel_name,
+            personnel_department=personnel.department if personnel else assignment.department,
+            personnel_title=personnel.title if personnel else None,
+            personnel_employee_code=personnel.employee_code if personnel else None,
+            note=assignment.note,
+        )
+
+    def _build_exit_report_assets(self, personnel_id: str) -> list[dict[str, Any]]:
+        rows = self._query_all(
+            """
+            SELECT
+                a.id AS assignment_id,
+                a.asset_id,
+                a.asset_code,
+                a.asset_name,
+                a.assigned_at,
+                a.returned_at,
+                a.is_active,
+                s.serial_number,
+                s.brand_model
+            FROM assignments a
+            LEFT JOIN assets s ON s.id = a.asset_id
+            WHERE a.personnel_id = ?
+            ORDER BY a.assigned_at DESC
+            """,
+            (personnel_id,),
+        )
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            assigned_at = from_db_datetime(row["assigned_at"])
+            if not assigned_at:
+                continue
+            returned_at = from_db_datetime(row["returned_at"])
+            items.append(
+                {
+                    "assignment_id": row["assignment_id"],
+                    "asset_id": row["asset_id"],
+                    "asset_code": row["asset_code"],
+                    "asset_name": row["asset_name"],
+                    "serial_number": row["serial_number"],
+                    "brand_model": row["brand_model"],
+                    "assigned_at": to_db_datetime(assigned_at),
+                    "returned_at": to_db_datetime(returned_at),
+                    "is_active": bool(row["is_active"]),
+                }
+            )
+        return items
+
+    def list_exit_reports(self, limit_count: int = 100, personnel_id: str | None = None) -> list[ExitReportRecord]:
+        query = "SELECT * FROM exit_reports"
+        params: list[Any] = []
+        if personnel_id:
+            query += " WHERE personnel_id = ?"
+            params.append(personnel_id)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(int(limit_count))
+        rows = self._query_all(query, tuple(params))
+        return [row_to_exit_report_record(row) for row in rows]
+
+    def get_exit_report(self, report_id: str) -> ExitReportDetail:
+        row = self._query_one("SELECT * FROM exit_reports WHERE id = ?", (report_id,))
+        if not row:
+            raise KeyError("Exit report not found.")
+        record = row_to_exit_report_record(row)
+        assets = parse_exit_report_assets(row["assets_json"])
+        return ExitReportDetail(**record.model_dump(), assets=assets)
+
+    def create_exit_report(self, payload: ExitReportCreate, user_email: str) -> ExitReportDetail:
+        personnel_row = self._query_one("SELECT * FROM personnel WHERE id = ? LIMIT 1", (payload.personnel_id,))
+        if not personnel_row:
+            raise KeyError("Personnel not found.")
+        personnel = row_to_personnel(personnel_row)
+
+        report_id = new_id("xrp_")
+        created_at = now_utc()
+        meeting_date = payload.meeting_date or created_at
+        assets = self._build_exit_report_assets(personnel.id)
+        asset_count = len(assets)
+        assets_json = json.dumps(assets, ensure_ascii=False)
+
+        self._execute(
+            """
+            INSERT INTO exit_reports (
+                id, personnel_id, personnel_name, department, title, employee_code,
+                created_by, created_at, meeting_date, note, asset_count, assets_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                report_id,
+                personnel.id,
+                personnel.full_name,
+                clean_optional(personnel.department),
+                clean_optional(personnel.title),
+                clean_optional(personnel.employee_code),
+                user_email,
+                to_db_datetime(created_at),
+                to_db_datetime(meeting_date),
+                clean_optional(payload.note),
+                int(asset_count),
+                assets_json,
+            ),
+        )
+        self.add_log(
+            user_email,
+            "exit_report_created",
+            f"{personnel.full_name} icin isten cikis tutanagi olusturuldu. Kayit: {report_id}",
+        )
+        return self.get_exit_report(report_id)
 
     def _sync_personnel_assignments(self, personnel_id: str) -> None:
         row = self._query_one(

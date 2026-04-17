@@ -2,12 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import toast from "react-hot-toast";
+import { useNavigate } from "react-router-dom";
 
 import { Pagination } from "@/components/ui/Pagination";
 import {
+  createAssignment,
   createAsset,
   deleteAsset,
   getAssets,
+  getPersonnel,
   updateAsset,
   type Asset,
   type AssetPayload,
@@ -258,6 +261,8 @@ export function AssetsPage() {
           }}
           onSaved={() => {
             qc.invalidateQueries({ queryKey: ["assets"] });
+            qc.invalidateQueries({ queryKey: ["assignments"] });
+            qc.invalidateQueries({ queryKey: ["personnel"] });
             qc.invalidateQueries({ queryKey: ["dashboard"] });
             qc.invalidateQueries({ queryKey: ["logs"] });
             setModal(null);
@@ -282,6 +287,13 @@ function AssetModal({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const navigate = useNavigate();
+  const { data: personnel = [] } = useQuery({
+    queryKey: ["personnel"],
+    queryFn: getPersonnel,
+    enabled: mode === "add",
+  });
+
   const [form, setForm] = useState<AssetPayload>({
     asset_id: asset?.asset_id ?? "",
     name: asset?.name ?? "",
@@ -291,6 +303,9 @@ function AssetModal({
     status: asset?.status ?? "Aktif",
     added_at: asset?.added_at ?? "",
   });
+  const [assignOnCreate, setAssignOnCreate] = useState(false);
+  const [assignmentPersonnelId, setAssignmentPersonnelId] = useState("");
+  const [assignmentNote, setAssignmentNote] = useState("");
   const [loading, setLoading] = useState(false);
 
   const productHints = useMemo(() => {
@@ -350,7 +365,21 @@ function AssetModal({
 
     try {
       if (mode === "add") {
-        await createAsset(form);
+        const created = await createAsset(form);
+        if (assignOnCreate) {
+          if (!assignmentPersonnelId) {
+            throw new Error("Otomatik zimmet icin personel seciniz.");
+          }
+          const assignment = await createAssignment({
+            asset_id: created.id,
+            personnel_id: assignmentPersonnelId,
+            note: assignmentNote,
+          });
+          toast.success("Demirbas eklendi, zimmet atandi ve form hazirlandi.");
+          onSaved();
+          navigate(`/print/assignment/${assignment.id}`);
+          return;
+        }
         toast.success("Demirbas eklendi.");
       } else if (asset) {
         await updateAsset(asset.id, form);
@@ -411,7 +440,7 @@ function AssetModal({
                 Benzer urun bulundu: <strong>{suggestedAsset.name}</strong>
               </p>
               <p className="mt-2 text-xs text-blue-700">
-                Kategori: {suggestedAsset.category || "-"} · Marka / Model: {suggestedAsset.brand_model || "-"}
+                Kategori: {suggestedAsset.category || "-"} - Marka / Model: {suggestedAsset.brand_model || "-"}
               </p>
               <button
                 type="button"
@@ -438,6 +467,53 @@ function AssetModal({
             </select>
           </div>
 
+          {mode === "add" && (
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4">
+              <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-emerald-900">
+                <input
+                  type="checkbox"
+                  checked={assignOnCreate}
+                  onChange={(event) => setAssignOnCreate(event.target.checked)}
+                  className="h-4 w-4 rounded border-emerald-300 text-emerald-600 focus:ring-emerald-500"
+                />
+                Demirbasi eklerken zimmet ata ve formu otomatik olustur
+              </label>
+
+              {assignOnCreate && (
+                <div className="mt-3 space-y-3">
+                  <div>
+                    <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                      Personel
+                    </label>
+                    <select
+                      value={assignmentPersonnelId}
+                      onChange={(event) => setAssignmentPersonnelId(event.target.value)}
+                      className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                    >
+                      <option value="">Seciniz...</option>
+                      {personnel.map((item) => (
+                        <option key={item.id} value={item.id}>
+                          {item.full_name} {item.department ? `- ${item.department}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600">
+                      Zimmet Notu
+                    </label>
+                    <textarea
+                      value={assignmentNote}
+                      onChange={(event) => setAssignmentNote(event.target.value)}
+                      rows={2}
+                      className="w-full resize-none rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex gap-3 pt-2">
             <button
               type="button"
@@ -451,7 +527,7 @@ function AssetModal({
               disabled={loading}
               className="flex-1 rounded-xl bg-brand-600 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-700 disabled:opacity-60"
             >
-              {loading ? "Kaydediliyor..." : "Kaydet"}
+              {loading ? "Kaydediliyor..." : mode === "add" && assignOnCreate ? "Kaydet + Zimmet Formu" : "Kaydet"}
             </button>
           </div>
         </form>

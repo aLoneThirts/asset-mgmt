@@ -113,6 +113,53 @@ interface ApiAssignmentRecord {
   is_active: boolean;
 }
 
+interface ApiAssignmentFormDocument {
+  assignment_id: string;
+  asset_id: string;
+  asset_name: string;
+  asset_code: string;
+  serial_number?: string | null;
+  brand_model?: string | null;
+  assigned_by: string;
+  assigned_at: string;
+  personnel_id: string;
+  personnel_name: string;
+  personnel_department?: string | null;
+  personnel_title?: string | null;
+  personnel_employee_code?: string | null;
+  note?: string | null;
+}
+
+interface ApiExitReportAsset {
+  assignment_id: string;
+  asset_id: string;
+  asset_code: string;
+  asset_name: string;
+  serial_number?: string | null;
+  brand_model?: string | null;
+  assigned_at: string;
+  returned_at?: string | null;
+  is_active: boolean;
+}
+
+interface ApiExitReportRecord {
+  id: string;
+  personnel_id: string;
+  personnel_name: string;
+  department?: string | null;
+  title?: string | null;
+  employee_code?: string | null;
+  created_by: string;
+  created_at: string;
+  meeting_date: string;
+  note?: string | null;
+  asset_count: number;
+}
+
+interface ApiExitReportDetail extends ApiExitReportRecord {
+  assets: ApiExitReportAsset[];
+}
+
 interface ApiReportSummary {
   total_personnel: number;
   active_assignments: number;
@@ -304,6 +351,59 @@ export interface AssignmentRecord {
   is_active: boolean;
 }
 
+export interface AssignmentFormDocument {
+  assignment_id: string;
+  asset_id: string;
+  asset_name: string;
+  asset_code: string;
+  serial_number?: string;
+  brand_model?: string;
+  assigned_by: string;
+  assigned_at: string;
+  personnel_id: string;
+  personnel_name: string;
+  personnel_department?: string;
+  personnel_title?: string;
+  personnel_employee_code?: string;
+  note?: string;
+}
+
+export interface ExitReportAsset {
+  assignment_id: string;
+  asset_id: string;
+  asset_code: string;
+  asset_name: string;
+  serial_number?: string;
+  brand_model?: string;
+  assigned_at: string;
+  returned_at?: string;
+  is_active: boolean;
+}
+
+export interface ExitReportRecord {
+  id: string;
+  personnel_id: string;
+  personnel_name: string;
+  department?: string;
+  title?: string;
+  employee_code?: string;
+  created_by: string;
+  created_at: string;
+  meeting_date: string;
+  note?: string;
+  asset_count: number;
+}
+
+export interface ExitReportDetail extends ExitReportRecord {
+  assets: ExitReportAsset[];
+}
+
+export interface ExitReportCreatePayload {
+  personnel_id: string;
+  note?: string;
+  meeting_date?: string;
+}
+
 export interface AssignmentPayload {
   asset_id: string;
   personnel_id: string;
@@ -491,6 +591,58 @@ function mapAssignment(item: ApiAssignmentRecord): AssignmentRecord {
     returned_at: item.returned_at ?? undefined,
     returned_by: item.returned_by ?? undefined,
     is_active: item.is_active,
+  };
+}
+
+function mapAssignmentFormDocument(item: ApiAssignmentFormDocument): AssignmentFormDocument {
+  return {
+    assignment_id: item.assignment_id,
+    asset_id: item.asset_id,
+    asset_name: item.asset_name,
+    asset_code: item.asset_code,
+    serial_number: item.serial_number ?? undefined,
+    brand_model: item.brand_model ?? undefined,
+    assigned_by: item.assigned_by,
+    assigned_at: item.assigned_at,
+    personnel_id: item.personnel_id,
+    personnel_name: item.personnel_name,
+    personnel_department: item.personnel_department ?? undefined,
+    personnel_title: item.personnel_title ?? undefined,
+    personnel_employee_code: item.personnel_employee_code ?? undefined,
+    note: item.note ?? undefined,
+  };
+}
+
+function mapExitReportRecord(item: ApiExitReportRecord): ExitReportRecord {
+  return {
+    id: item.id,
+    personnel_id: item.personnel_id,
+    personnel_name: item.personnel_name,
+    department: item.department ?? undefined,
+    title: item.title ?? undefined,
+    employee_code: item.employee_code ?? undefined,
+    created_by: item.created_by,
+    created_at: item.created_at,
+    meeting_date: item.meeting_date,
+    note: item.note ?? undefined,
+    asset_count: item.asset_count,
+  };
+}
+
+function mapExitReportDetail(item: ApiExitReportDetail): ExitReportDetail {
+  return {
+    ...mapExitReportRecord(item),
+    assets: item.assets.map((asset) => ({
+      assignment_id: asset.assignment_id,
+      asset_id: asset.asset_id,
+      asset_code: asset.asset_code,
+      asset_name: asset.asset_name,
+      serial_number: asset.serial_number ?? undefined,
+      brand_model: asset.brand_model ?? undefined,
+      assigned_at: asset.assigned_at,
+      returned_at: asset.returned_at ?? undefined,
+      is_active: asset.is_active,
+    })),
   };
 }
 
@@ -721,6 +873,36 @@ export async function returnAssignment(id: string, note?: string): Promise<Assig
     body: JSON.stringify({ note: note || null }),
   });
   return mapAssignment(item);
+}
+
+export async function getAssignmentFormDocument(assignmentId: string): Promise<AssignmentFormDocument> {
+  const item = await apiRequest<ApiAssignmentFormDocument>(`/documents/assignment/${assignmentId}`);
+  return mapAssignmentFormDocument(item);
+}
+
+export async function getExitReports(limitN = 100, personnelId?: string): Promise<ExitReportRecord[]> {
+  const query = personnelId
+    ? `/documents/exit-reports?limit=${limitN}&personnel_id=${encodeURIComponent(personnelId)}`
+    : `/documents/exit-reports?limit=${limitN}`;
+  const items = await apiRequest<ApiExitReportRecord[]>(query);
+  return items.map(mapExitReportRecord);
+}
+
+export async function createExitReport(data: ExitReportCreatePayload): Promise<ExitReportDetail> {
+  const item = await apiRequest<ApiExitReportDetail>("/documents/exit-reports", {
+    method: "POST",
+    body: JSON.stringify({
+      personnel_id: data.personnel_id,
+      note: data.note || null,
+      meeting_date: data.meeting_date || null,
+    }),
+  });
+  return mapExitReportDetail(item);
+}
+
+export async function getExitReport(reportId: string): Promise<ExitReportDetail> {
+  const item = await apiRequest<ApiExitReportDetail>(`/documents/exit-reports/${reportId}`);
+  return mapExitReportDetail(item);
 }
 
 export async function getReportSummary(): Promise<ReportSummary> {

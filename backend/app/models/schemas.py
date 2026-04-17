@@ -214,6 +214,59 @@ class AssignmentRecord(BaseModel):
     is_active: bool = True
 
 
+class AssignmentFormDocument(BaseModel):
+    assignment_id: str
+    asset_id: str
+    asset_name: str
+    asset_code: str
+    serial_number: str | None = None
+    brand_model: str | None = None
+    assigned_by: str
+    assigned_at: datetime
+    personnel_id: str
+    personnel_name: str
+    personnel_department: str | None = None
+    personnel_title: str | None = None
+    personnel_employee_code: str | None = None
+    note: str | None = None
+
+
+class ExitReportCreate(BaseModel):
+    personnel_id: str
+    note: str | None = None
+    meeting_date: datetime | None = None
+
+
+class ExitReportAsset(BaseModel):
+    assignment_id: str
+    asset_id: str
+    asset_code: str
+    asset_name: str
+    serial_number: str | None = None
+    brand_model: str | None = None
+    assigned_at: datetime
+    returned_at: datetime | None = None
+    is_active: bool = False
+
+
+class ExitReportRecord(BaseModel):
+    id: str
+    personnel_id: str
+    personnel_name: str
+    department: str | None = None
+    title: str | None = None
+    employee_code: str | None = None
+    created_by: str
+    created_at: datetime
+    meeting_date: datetime
+    note: str | None = None
+    asset_count: int = 0
+
+
+class ExitReportDetail(ExitReportRecord):
+    assets: list[ExitReportAsset]
+
+
 class ChartDatum(BaseModel):
     label: str
     value: int

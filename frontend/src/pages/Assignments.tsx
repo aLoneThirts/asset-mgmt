@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ContactRound, Plus, Trash2, X } from "lucide-react";
+import { ContactRound, FileText, Plus, Printer, Trash2, X } from "lucide-react";
 import toast from "react-hot-toast";
+import { useNavigate } from "react-router-dom";
 
 import { Pagination } from "@/components/ui/Pagination";
 import {
   createAssignment,
+  createExitReport,
   createPersonnel,
   deletePersonnel,
   getAssignments,
@@ -22,9 +24,12 @@ import {
 const PAGE_SIZE = 25;
 
 export function AssignmentsPage() {
+  const navigate = useNavigate();
   const qc = useQueryClient();
   const [personnelModal, setPersonnelModal] = useState(false);
   const [assignmentModal, setAssignmentModal] = useState(false);
+  const [exitReportModal, setExitReportModal] = useState(false);
+  const [exitReportPersonnelId, setExitReportPersonnelId] = useState("");
   const [personnelPage, setPersonnelPage] = useState(1);
   const [activeAssignmentsPage, setActiveAssignmentsPage] = useState(1);
   const [historyPage, setHistoryPage] = useState(1);
@@ -102,6 +107,11 @@ export function AssignmentsPage() {
     }
   }
 
+  function openExitReport(personnelId?: string) {
+    setExitReportPersonnelId(personnelId || "");
+    setExitReportModal(true);
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -127,6 +137,13 @@ export function AssignmentsPage() {
             <Plus size={16} />
             Zimmet Ata
           </button>
+          <button
+            onClick={() => openExitReport()}
+            className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+          >
+            <FileText size={16} />
+            Isten Cikis Tutanagi
+          </button>
         </div>
       </div>
 
@@ -150,11 +167,18 @@ export function AssignmentsPage() {
                   <div>
                     <p className="font-medium text-slate-900">{item.full_name}</p>
                     <p className="mt-1 text-xs text-slate-500">
-                      {item.department || "Departman yok"} · {item.title || "Unvan yok"}
+                      {item.department || "Departman yok"} - {item.title || "Unvan yok"}
                     </p>
                     <p className="mt-1 text-xs text-slate-400">{item.email || item.employee_code || "-"}</p>
                   </div>
                   <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => openExitReport(item.id)}
+                      className="rounded-lg border border-slate-200 px-2.5 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
+                      title="Isten cikis tutanagi olustur"
+                    >
+                      Tutanak
+                    </button>
                     <span className="rounded-full bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700">
                       Aktif zimmet: {item.active_assignment_count}
                     </span>
@@ -199,19 +223,28 @@ export function AssignmentsPage() {
                   <div>
                     <p className="font-medium text-slate-900">{item.asset_name}</p>
                     <p className="mt-1 text-xs text-slate-500">
-                      {item.asset_code} · {item.personnel_name}
+                      {item.asset_code} - {item.personnel_name}
                     </p>
                     <p className="mt-1 text-xs text-slate-400">
-                      {item.department || "Departman yok"} · {new Date(item.assigned_at).toLocaleString("tr-TR")}
+                      {item.department || "Departman yok"} - {new Date(item.assigned_at).toLocaleString("tr-TR")}
                     </p>
                     {item.note && <p className="mt-2 text-sm text-slate-600">{item.note}</p>}
                   </div>
-                  <button
-                    onClick={() => void handleReturn(item)}
-                    className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
-                  >
-                    Iade Al
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => navigate(`/print/assignment/${item.id}`)}
+                      className="inline-flex items-center gap-1 rounded-xl border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                      <Printer size={12} />
+                      Form
+                    </button>
+                    <button
+                      onClick={() => void handleReturn(item)}
+                      className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-700"
+                    >
+                      Iade Al
+                    </button>
+                  </div>
                 </div>
               ))
             )}
@@ -295,13 +328,30 @@ export function AssignmentsPage() {
       {assignmentModal && (
         <AssignmentModal
           onClose={() => setAssignmentModal(false)}
-          onSaved={() => {
+          onSaved={(created) => {
             qc.invalidateQueries({ queryKey: ["assignments"] });
             qc.invalidateQueries({ queryKey: ["assets"] });
             qc.invalidateQueries({ queryKey: ["personnel"] });
             qc.invalidateQueries({ queryKey: ["dashboard"] });
             qc.invalidateQueries({ queryKey: ["logs"] });
             setAssignmentModal(false);
+            navigate(`/print/assignment/${created.id}`);
+          }}
+        />
+      )}
+
+      {exitReportModal && (
+        <ExitReportModal
+          initialPersonnelId={exitReportPersonnelId}
+          onClose={() => {
+            setExitReportModal(false);
+            setExitReportPersonnelId("");
+          }}
+          onSaved={(reportId) => {
+            qc.invalidateQueries({ queryKey: ["logs"] });
+            setExitReportModal(false);
+            setExitReportPersonnelId("");
+            navigate(`/print/exit-report/${reportId}`);
           }}
         />
       )}
@@ -337,12 +387,33 @@ function PersonnelModal({ onClose, onSaved }: { onClose: () => void; onSaved: ()
   return (
     <ModalShell title="Yeni Personel" onClose={onClose}>
       <form onSubmit={handleSubmit} className="space-y-4 p-6">
-        <TextField label="Ad Soyad *" value={form.full_name || ""} onChange={(value) => setForm((current) => ({ ...current, full_name: value }))} required />
+        <TextField
+          label="Ad Soyad *"
+          value={form.full_name || ""}
+          onChange={(value) => setForm((current) => ({ ...current, full_name: value }))}
+          required
+        />
         <div className="grid gap-4 md:grid-cols-2">
-          <TextField label="E-posta" value={form.email || ""} onChange={(value) => setForm((current) => ({ ...current, email: value }))} />
-          <TextField label="Personel Kodu" value={form.employee_code || ""} onChange={(value) => setForm((current) => ({ ...current, employee_code: value }))} />
-          <TextField label="Departman" value={form.department || ""} onChange={(value) => setForm((current) => ({ ...current, department: value }))} />
-          <TextField label="Unvan" value={form.title || ""} onChange={(value) => setForm((current) => ({ ...current, title: value }))} />
+          <TextField
+            label="E-posta"
+            value={form.email || ""}
+            onChange={(value) => setForm((current) => ({ ...current, email: value }))}
+          />
+          <TextField
+            label="Personel Kodu"
+            value={form.employee_code || ""}
+            onChange={(value) => setForm((current) => ({ ...current, employee_code: value }))}
+          />
+          <TextField
+            label="Departman"
+            value={form.department || ""}
+            onChange={(value) => setForm((current) => ({ ...current, department: value }))}
+          />
+          <TextField
+            label="Unvan"
+            value={form.title || ""}
+            onChange={(value) => setForm((current) => ({ ...current, title: value }))}
+          />
         </div>
         <ModalActions loading={loading} onClose={onClose} />
       </form>
@@ -350,7 +421,13 @@ function PersonnelModal({ onClose, onSaved }: { onClose: () => void; onSaved: ()
   );
 }
 
-function AssignmentModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+function AssignmentModal({
+  onClose,
+  onSaved,
+}: {
+  onClose: () => void;
+  onSaved: (created: AssignmentRecord) => void;
+}) {
   const { data: assets = [] } = useQuery({
     queryKey: ["assets"],
     queryFn: getAssets,
@@ -374,9 +451,9 @@ function AssignmentModal({ onClose, onSaved }: { onClose: () => void; onSaved: (
     event.preventDefault();
     setLoading(true);
     try {
-      await createAssignment({ asset_id: assetId, personnel_id: personnelId, note });
+      const created = await createAssignment({ asset_id: assetId, personnel_id: personnelId, note });
       toast.success("Zimmet atandi.");
-      onSaved();
+      onSaved(created);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Zimmet atanamadi.");
     } finally {
@@ -428,7 +505,87 @@ function AssignmentModal({ onClose, onSaved }: { onClose: () => void; onSaved: (
             className="w-full resize-none rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
           />
         </div>
-        <ModalActions loading={loading} onClose={onClose} />
+        <ModalActions loading={loading} onClose={onClose} saveLabel="Ata ve Formu Yazdir" />
+      </form>
+    </ModalShell>
+  );
+}
+
+function ExitReportModal({
+  initialPersonnelId,
+  onClose,
+  onSaved,
+}: {
+  initialPersonnelId?: string;
+  onClose: () => void;
+  onSaved: (reportId: string) => void;
+}) {
+  const { data: personnel = [] } = useQuery({
+    queryKey: ["personnel"],
+    queryFn: getPersonnel,
+  });
+
+  const [personnelId, setPersonnelId] = useState(initialPersonnelId || "");
+  const [note, setNote] = useState("");
+  const [meetingDate, setMeetingDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    setLoading(true);
+    try {
+      const report = await createExitReport({
+        personnel_id: personnelId,
+        note,
+        meeting_date: meetingDate ? new Date(`${meetingDate}T09:00:00`).toISOString() : undefined,
+      });
+      toast.success("Isten cikis tutanagi olusturuldu.");
+      onSaved(report.id);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Tutanak olusturulamadi.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <ModalShell title="Isten Cikis Tutanagi" onClose={onClose}>
+      <form onSubmit={handleSubmit} className="space-y-4 p-6">
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600">Personel</label>
+          <select
+            value={personnelId}
+            onChange={(event) => setPersonnelId(event.target.value)}
+            required
+            className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+          >
+            <option value="">Seciniz...</option>
+            {personnel.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.full_name} {item.department ? `- ${item.department}` : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600">Tutanak Tarihi</label>
+          <input
+            type="date"
+            value={meetingDate}
+            onChange={(event) => setMeetingDate(event.target.value)}
+            className="w-full rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+          />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-600">Not</label>
+          <textarea
+            value={note}
+            onChange={(event) => setNote(event.target.value)}
+            rows={3}
+            className="w-full resize-none rounded-xl border border-slate-200 px-4 py-2.5 text-sm focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-200"
+          />
+        </div>
+        <ModalActions loading={loading} onClose={onClose} saveLabel="Olustur ve Yazdir" />
       </form>
     </ModalShell>
   );
@@ -474,7 +631,15 @@ function TextField({
   );
 }
 
-function ModalActions({ loading, onClose }: { loading: boolean; onClose: () => void }) {
+function ModalActions({
+  loading,
+  onClose,
+  saveLabel,
+}: {
+  loading: boolean;
+  onClose: () => void;
+  saveLabel?: string;
+}) {
   return (
     <div className="flex gap-3 pt-2">
       <button
@@ -489,7 +654,7 @@ function ModalActions({ loading, onClose }: { loading: boolean; onClose: () => v
         disabled={loading}
         className="flex-1 rounded-xl bg-brand-600 py-2.5 text-sm font-semibold text-white transition hover:bg-brand-700 disabled:opacity-60"
       >
-        {loading ? "Kaydediliyor..." : "Kaydet"}
+        {loading ? "Kaydediliyor..." : saveLabel || "Kaydet"}
       </button>
     </div>
   );

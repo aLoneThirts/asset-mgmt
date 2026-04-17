@@ -16,6 +16,12 @@ const LogsPage        = lazy(() => import("@/pages/Logs").then(m => ({ default: 
 const AdminUsersPage  = lazy(() => import("@/pages/AdminUsers").then(m => ({ default: m.AdminUsersPage })));
 const AssignmentsPage = lazy(() => import("@/pages/Assignments").then(m => ({ default: m.AssignmentsPage })));
 const ReportsPage     = lazy(() => import("@/pages/Reports").then(m => ({ default: m.ReportsPage })));
+const AssignmentFormPrintPage = lazy(() =>
+  import("@/pages/AssignmentFormPrint").then((m) => ({ default: m.AssignmentFormPrintPage })),
+);
+const ExitReportPrintPage = lazy(() =>
+  import("@/pages/ExitReportPrint").then((m) => ({ default: m.ExitReportPrintPage })),
+);
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: 1, staleTime: 30_000 } } });
 
@@ -42,6 +48,8 @@ export default function App() {
                   <Route path="/logs"        element={<LogsPage />} />
                   <Route path="/admin/users" element={<AdminUsersPage />} />
                 </Route>
+                <Route path="/print/assignment/:assignmentId" element={<AssignmentFormPrintPage />} />
+                <Route path="/print/exit-report/:reportId" element={<ExitReportPrintPage />} />
               </Route>
 
               <Route path="*" element={<Navigate to="/dashboard" replace />} />
