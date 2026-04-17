@@ -1,9 +1,9 @@
 import { useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, FileSpreadsheet, Upload } from "lucide-react";
 import toast from "react-hot-toast";
 
-import { uploadAssetExcel, type ImportResult } from "@/lib/firestore";
+import { getAssetImportHistory, uploadAssetExcel, type ImportFileRecord, type ImportResult } from "@/lib/firestore";
 
 const EXPECTED_COLUMNS = [
   "Demirbas ID",
@@ -36,6 +36,10 @@ export function ImportPage() {
   const [result, setResult] = useState<ImportResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const visibleWarnings = (result?.warnings ?? []).slice(0, 8);
+  const { data: importHistory = [], isLoading: historyLoading } = useQuery({
+    queryKey: ["import-history"],
+    queryFn: () => getAssetImportHistory(30),
+  });
 
   function handleSelect(nextFile: File | undefined) {
     if (!nextFile) return;
@@ -60,10 +64,12 @@ export function ImportPage() {
       qc.invalidateQueries({ queryKey: ["assets"] });
       qc.invalidateQueries({ queryKey: ["dashboard"] });
       qc.invalidateQueries({ queryKey: ["logs"] });
+      qc.invalidateQueries({ queryKey: ["import-history"] });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Import islemi basarisiz.";
       setErrorMessage(message);
       toast.error(message);
+      qc.invalidateQueries({ queryKey: ["import-history"] });
     } finally {
       setLoading(false);
     }
@@ -74,7 +80,7 @@ export function ImportPage() {
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Excel Import</h1>
         <p className="mt-1 text-sm text-slate-500">
-          Lighthouse ciktilarini backend uzerinde Pandas ile isleyip Firestore&apos;a aktarir.
+          Lighthouse ciktilarini backend uzerinde Pandas ile isleyip kalici veri katmanina aktarir.
         </p>
       </div>
 
@@ -193,6 +199,65 @@ export function ImportPage() {
           )}
         </div>
       )}
+
+      <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-slate-900">Son Import Gecmisi</h2>
+          <p className="text-xs text-slate-500">{importHistory.length} kayit</p>
+        </div>
+        {historyLoading ? (
+          <p className="text-sm text-slate-500">Import gecmisi yukleniyor...</p>
+        ) : importHistory.length === 0 ? (
+          <p className="text-sm text-slate-500">Henuz import kaydi bulunmuyor.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="border-b border-slate-100 text-left text-xs uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-2 py-2">Dosya</th>
+                  <th className="px-2 py-2">Yukleyen</th>
+                  <th className="px-2 py-2">Tarih</th>
+                  <th className="px-2 py-2">Sonuc</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {importHistory.map((item) => (
+                  <tr key={item.id}>
+                    <td className="px-2 py-2">
+                      <p className="font-medium text-slate-800">{item.file_name}</p>
+                      <p className="text-xs text-slate-500">Toplam satir: {item.total_rows}</p>
+                    </td>
+                    <td className="px-2 py-2 text-slate-600">{item.uploaded_by}</td>
+                    <td className="px-2 py-2 text-slate-600">{new Date(item.uploaded_at).toLocaleString("tr-TR")}</td>
+                    <td className="px-2 py-2">
+                      <StatusBadge item={item} />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
+  );
+}
+
+function StatusBadge({ item }: { item: ImportFileRecord }) {
+  if (item.status === "failed") {
+    return (
+      <div>
+        <span className="rounded-full bg-red-100 px-2 py-1 text-xs font-semibold text-red-700">Basarisiz</span>
+        {item.error_message && <p className="mt-1 text-xs text-red-600">{item.error_message}</p>}
+      </div>
+    );
+  }
+  if (item.status === "duplicate_skipped") {
+    return <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-700">Mukerrer - Atlandi</span>;
+  }
+  return (
+    <span className="rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700">
+      Basarili ({item.imported_count} yeni / {item.updated_count} guncel / {item.skipped_count} atlanan)
+    </span>
   );
 }

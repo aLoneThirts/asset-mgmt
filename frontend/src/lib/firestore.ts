@@ -120,6 +120,21 @@ interface ApiReportSummary {
   exported_at: string;
 }
 
+interface ApiImportFileRecord {
+  id: string;
+  file_name: string;
+  file_hash: string;
+  uploaded_by: string;
+  uploaded_at: string;
+  total_rows: number;
+  imported_count: number;
+  updated_count: number;
+  skipped_count: number;
+  warning_count: number;
+  status: "completed" | "failed" | "duplicate_skipped";
+  error_message?: string | null;
+}
+
 export interface Asset {
   id: string;
   asset_id: string;
@@ -214,6 +229,21 @@ export interface ImportResult {
   updated_count: number;
   skipped_count: number;
   warnings: string[];
+}
+
+export interface ImportFileRecord {
+  id: string;
+  file_name: string;
+  file_hash: string;
+  uploaded_by: string;
+  uploaded_at: string;
+  total_rows: number;
+  imported_count: number;
+  updated_count: number;
+  skipped_count: number;
+  warning_count: number;
+  status: "completed" | "failed" | "duplicate_skipped";
+  error_message?: string;
 }
 
 interface ApiAdminUser {
@@ -441,6 +471,23 @@ function mapAssignment(item: ApiAssignmentRecord): AssignmentRecord {
   };
 }
 
+function mapImportFile(item: ApiImportFileRecord): ImportFileRecord {
+  return {
+    id: item.id,
+    file_name: item.file_name,
+    file_hash: item.file_hash,
+    uploaded_by: item.uploaded_by,
+    uploaded_at: item.uploaded_at,
+    total_rows: item.total_rows,
+    imported_count: item.imported_count,
+    updated_count: item.updated_count,
+    skipped_count: item.skipped_count,
+    warning_count: item.warning_count,
+    status: item.status,
+    error_message: item.error_message ?? undefined,
+  };
+}
+
 export async function logSession(event: "login" | "register") {
   await apiRequest<void>("/auth/session", {
     method: "POST",
@@ -495,6 +542,13 @@ export async function uploadAssetExcel(file: File): Promise<ImportResult> {
     method: "POST",
     body: formData,
   });
+}
+
+export async function getAssetImportHistory(limitN = 50, mineOnly = true): Promise<ImportFileRecord[]> {
+  const items = await apiRequest<ApiImportFileRecord[]>(
+    `/imports/assets/history?limit=${limitN}&mine_only=${mineOnly}`,
+  );
+  return items.map(mapImportFile);
 }
 
 export async function getMaintenance(): Promise<MaintenanceRecord[]> {

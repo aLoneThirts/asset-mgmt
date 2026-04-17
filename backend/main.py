@@ -21,6 +21,7 @@ try:
         AssignmentRecord,
         AssignmentReturn,
         DashboardSummary,
+        ImportFileRecord,
         ImportResult,
         LogEntry,
         MaintenanceCreate,
@@ -49,6 +50,7 @@ except ModuleNotFoundError:
         AssignmentRecord,
         AssignmentReturn,
         DashboardSummary,
+        ImportFileRecord,
         ImportResult,
         LogEntry,
         MaintenanceCreate,
@@ -188,9 +190,23 @@ async def import_assets(
 
     content = await file.read()
     try:
-        return service.import_assets_from_excel(content, user.email)
+        return service.import_assets_from_excel(content, user.email, file.filename)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/imports/assets/history", response_model=list[ImportFileRecord])
+def list_asset_import_history(
+    limit: int = 50,
+    mine_only: bool = True,
+    user: AuthUser = Depends(get_current_user),
+    service: FirestoreService = Depends(get_service),
+) -> list[ImportFileRecord]:
+    try:
+        uploaded_by = user.email if mine_only else None
+        return service.list_asset_import_history(limit_count=min(max(limit, 1), 200), uploaded_by=uploaded_by)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

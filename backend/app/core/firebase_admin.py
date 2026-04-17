@@ -15,6 +15,12 @@ def get_firebase_app() -> firebase_admin.App:
     if firebase_admin._apps:
         return firebase_admin.get_app()
 
+    app_options: dict[str, str] = {}
+    if settings.firebase_project_id:
+        app_options["projectId"] = settings.firebase_project_id
+    if settings.firebase_storage_bucket:
+        app_options["storageBucket"] = settings.firebase_storage_bucket
+
     if settings.firebase_project_id and settings.firebase_client_email and settings.firebase_private_key:
         certificate = credentials.Certificate(
             {
@@ -31,17 +37,9 @@ def get_firebase_app() -> firebase_admin.App:
                 "universe_domain": settings.firebase_universe_domain,
             }
         )
-        return firebase_admin.initialize_app(
-            certificate,
-            {"storageBucket": settings.firebase_storage_bucket},
-        )
+        return firebase_admin.initialize_app(certificate, app_options)
 
-    return firebase_admin.initialize_app(
-        options={
-            "projectId": settings.firebase_project_id,
-            "storageBucket": settings.firebase_storage_bucket,
-        }
-    )
+    return firebase_admin.initialize_app(options=app_options)
 
 
 def get_firestore_client() -> firestore.Client:

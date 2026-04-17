@@ -124,6 +124,21 @@ class ImportResult(BaseModel):
     warnings: list[str]
 
 
+class ImportFileRecord(BaseModel):
+    id: str
+    file_name: str
+    file_hash: str
+    uploaded_by: str
+    uploaded_at: datetime
+    total_rows: int
+    imported_count: int
+    updated_count: int
+    skipped_count: int
+    warning_count: int
+    status: Literal["completed", "failed", "duplicate_skipped"]
+    error_message: str | None = None
+
+
 class SessionLogRequest(BaseModel):
     event: Literal["login", "register"]
 

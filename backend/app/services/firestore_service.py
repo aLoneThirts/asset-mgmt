@@ -7,6 +7,8 @@ from datetime import UTC, datetime
 from io import BytesIO, StringIO
 from pathlib import Path
 import csv
+import hashlib
+import json
 import math
 import os
 import re
@@ -30,6 +32,7 @@ try:
         AssignmentReturn,
         ChartDatum,
         DashboardSummary,
+        ImportFileRecord,
         ImportResult,
         LogEntry,
         MaintenanceCreate,
@@ -57,6 +60,7 @@ except ModuleNotFoundError:
         AssignmentReturn,
         ChartDatum,
         DashboardSummary,
+        ImportFileRecord,
         ImportResult,
         LogEntry,
         MaintenanceCreate,
@@ -325,6 +329,23 @@ def row_to_assignment(row: sqlite3.Row) -> AssignmentRecord:
     )
 
 
+def row_to_import_file(row: sqlite3.Row) -> ImportFileRecord:
+    return ImportFileRecord(
+        id=row["id"],
+        file_name=row["file_name"],
+        file_hash=row["file_hash"],
+        uploaded_by=row["uploaded_by"],
+        uploaded_at=from_db_datetime(row["uploaded_at"]) or now_utc(),
+        total_rows=int(row["total_rows"] or 0),
+        imported_count=int(row["imported_count"] or 0),
+        updated_count=int(row["updated_count"] or 0),
+        skipped_count=int(row["skipped_count"] or 0),
+        warning_count=int(row["warning_count"] or 0),
+        status=row["status"] or "completed",
+        error_message=row["error_message"],
+    )
+
+
 def new_id(prefix: str = "") -> str:
     return f"{prefix}{uuid4().hex[:16]}"
 
@@ -336,13 +357,19 @@ class FirestoreService:
         settings = get_settings()
         self.database_path = self._resolve_database_path(settings.database_url)
         self._lock = threading.RLock()
-        self._cloud_sync_enabled = bool(os.getenv("VERCEL") and settings.firebase_storage_bucket)
-        self._cloud_bucket_name = settings.firebase_storage_bucket or ""
+        self._cloud_bucket_candidates = self._build_cloud_bucket_candidates(settings.firebase_storage_bucket, settings.firebase_project_id)
+        self._cloud_sync_enabled = bool(os.getenv("VERCEL") and self._cloud_bucket_candidates)
+        self._requires_durable_storage = bool(os.getenv("VERCEL") and self.database_path.startswith("/tmp"))
+        self._cloud_bucket_name = self._cloud_bucket_candidates[0] if self._cloud_bucket_candidates else ""
         self._cloud_blob_name = "asset-mgmt/sqlite/asset_mgmt.db"
         self._cloud_generation: int | None = None
         self._last_cloud_pull_at: datetime | None = None
         self._cloud_dirty = False
         self._bulk_write_depth = 0
+        if self._requires_durable_storage and not self._cloud_sync_enabled:
+            raise RuntimeError(
+                "Kalici veri saklama aktif degil. Vercel uzerinde FIREBASE_STORAGE_BUCKET veya kalici DATABASE_URL tanimlanmali."
+            )
         self._open_connection()
         if self._cloud_sync_enabled:
             self._sync_from_cloud(force=True)
@@ -355,15 +382,48 @@ class FirestoreService:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
 
+    def _build_cloud_bucket_candidates(self, bucket_name: str | None, project_id: str | None) -> list[str]:
+        candidates: list[str] = []
+
+        def add_candidate(value: str | None) -> None:
+            candidate = (value or "").strip()
+            if not candidate or candidate in candidates:
+                return
+            candidates.append(candidate)
+
+        add_candidate(bucket_name)
+
+        if bucket_name:
+            if bucket_name.endswith(".firebasestorage.app"):
+                add_candidate(bucket_name.replace(".firebasestorage.app", ".appspot.com"))
+            elif bucket_name.endswith(".appspot.com"):
+                add_candidate(bucket_name.replace(".appspot.com", ".firebasestorage.app"))
+
+        if project_id:
+            add_candidate(f"{project_id}.firebasestorage.app")
+            add_candidate(f"{project_id}.appspot.com")
+
+        return candidates
+
     def _get_cloud_blob(self):
         if not self._cloud_sync_enabled:
             return None
-        try:
-            app = get_firebase_app()
-            bucket = firebase_storage.bucket(name=self._cloud_bucket_name, app=app)
-            return bucket.blob(self._cloud_blob_name)
-        except Exception:
-            return None
+        last_error: Exception | None = None
+        app = get_firebase_app()
+        for bucket_name in self._cloud_bucket_candidates:
+            try:
+                bucket = firebase_storage.bucket(name=bucket_name, app=app)
+                blob = bucket.blob(self._cloud_blob_name)
+                self._cloud_bucket_name = bucket_name
+                return blob
+            except Exception as exc:
+                last_error = exc
+
+        if self._requires_durable_storage and last_error is not None:
+            raise RuntimeError(
+                "Kalici depolama baglantisi kurulamadi. FIREBASE_STORAGE_BUCKET ayarini kontrol edin."
+            ) from last_error
+        return None
 
     def _sync_from_cloud(self, force: bool = False) -> None:
         if not self._cloud_sync_enabled:
@@ -384,6 +444,10 @@ class FirestoreService:
 
         blob = self._get_cloud_blob()
         if not blob:
+            if self._requires_durable_storage:
+                raise RuntimeError(
+                    "Kalici depolama baglantisi kurulamadi. FIREBASE_STORAGE_BUCKET ayarini kontrol edin."
+                )
             return
 
         temp_path = f"{self.database_path}.download"
@@ -400,12 +464,16 @@ class FirestoreService:
             os.replace(temp_path, self.database_path)
             self._open_connection()
             self._cloud_generation = generation
-        except Exception:
+        except Exception as exc:
             if os.path.exists(temp_path):
                 try:
                     os.remove(temp_path)
                 except Exception:
                     pass
+            if self._is_cloud_object_missing(exc):
+                return
+            if self._requires_durable_storage:
+                raise RuntimeError("Kalici veri senkronizasyonu basarisiz oldu. Lutfen tekrar deneyin.") from exc
 
     def _is_cloud_generation_conflict(self, exc: Exception) -> bool:
         message = str(exc).lower()
@@ -419,6 +487,20 @@ class FirestoreService:
             or code == "412"
         )
 
+    def _is_cloud_object_missing(self, exc: Exception) -> bool:
+        message = str(exc).lower()
+        class_name = exc.__class__.__name__.lower()
+        code = str(getattr(exc, "code", "")).strip()
+        if "bucket" in message and "not" in message:
+            return False
+        return (
+            code == "404"
+            or "404" in message
+            or "notfound" in class_name
+            or "not found" in message
+            or "no such object" in message
+        )
+
     def _sync_to_cloud(self) -> None:
         if not self._cloud_sync_enabled:
             return
@@ -426,6 +508,10 @@ class FirestoreService:
             return
         blob = self._get_cloud_blob()
         if not blob:
+            if self._requires_durable_storage:
+                raise RuntimeError(
+                    "Kalici depolama baglantisi kurulamadi. FIREBASE_STORAGE_BUCKET ayarini kontrol edin."
+                )
             return
 
         try:
@@ -561,11 +647,29 @@ class FirestoreService:
             is_active INTEGER NOT NULL DEFAULT 1
         );
 
+        CREATE TABLE IF NOT EXISTS import_files (
+            id TEXT PRIMARY KEY,
+            file_name TEXT NOT NULL,
+            file_hash TEXT NOT NULL,
+            uploaded_by TEXT NOT NULL,
+            uploaded_at TEXT NOT NULL,
+            total_rows INTEGER NOT NULL DEFAULT 0,
+            imported_count INTEGER NOT NULL DEFAULT 0,
+            updated_count INTEGER NOT NULL DEFAULT 0,
+            skipped_count INTEGER NOT NULL DEFAULT 0,
+            warning_count INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'completed',
+            warnings TEXT,
+            error_message TEXT
+        );
+
         CREATE INDEX IF NOT EXISTS idx_assets_name ON assets(name);
         CREATE INDEX IF NOT EXISTS idx_logs_date ON logs(date);
         CREATE INDEX IF NOT EXISTS idx_maintenance_date ON maintenance(date);
         CREATE INDEX IF NOT EXISTS idx_assignments_asset_active ON assignments(asset_id, is_active);
         CREATE INDEX IF NOT EXISTS idx_assignments_personnel_active ON assignments(personnel_id, is_active);
+        CREATE INDEX IF NOT EXISTS idx_import_files_uploaded_at ON import_files(uploaded_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_import_files_hash_status ON import_files(file_hash, status);
         """
         with self._lock:
             self.conn.executescript(schema)
@@ -621,6 +725,56 @@ class FirestoreService:
     def list_logs(self, limit_count: int = 100) -> list[LogEntry]:
         rows = self._query_all("SELECT * FROM logs ORDER BY date DESC LIMIT ?", (int(limit_count),))
         return [row_to_log(row) for row in rows]
+
+    def list_asset_import_history(self, limit_count: int = 50, uploaded_by: str | None = None) -> list[ImportFileRecord]:
+        query = "SELECT * FROM import_files"
+        params: list[Any] = []
+        if uploaded_by:
+            query += " WHERE uploaded_by = ?"
+            params.append(uploaded_by)
+        query += " ORDER BY uploaded_at DESC LIMIT ?"
+        params.append(int(limit_count))
+        rows = self._query_all(query, tuple(params))
+        return [row_to_import_file(row) for row in rows]
+
+    def _record_import_file(
+        self,
+        *,
+        file_name: str,
+        file_hash: str,
+        uploaded_by: str,
+        uploaded_at: datetime,
+        total_rows: int,
+        imported_count: int,
+        updated_count: int,
+        skipped_count: int,
+        warnings: list[str],
+        status: str,
+        error_message: str | None = None,
+    ) -> None:
+        self._execute(
+            """
+            INSERT INTO import_files (
+                id, file_name, file_hash, uploaded_by, uploaded_at, total_rows,
+                imported_count, updated_count, skipped_count, warning_count, status, warnings, error_message
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                new_id("imp_"),
+                file_name,
+                file_hash,
+                uploaded_by,
+                to_db_datetime(uploaded_at),
+                int(total_rows),
+                int(imported_count),
+                int(updated_count),
+                int(skipped_count),
+                int(len(warnings)),
+                status,
+                json.dumps(warnings[:80], ensure_ascii=False) if warnings else None,
+                error_message,
+            ),
+        )
 
     def list_assets(self) -> list[Asset]:
         rows = self._query_all("SELECT * FROM assets")
@@ -979,11 +1133,50 @@ class FirestoreService:
                     (active_count, now, personnel_id),
                 )
 
-    def import_assets_from_excel(self, content: bytes, user_email: str) -> ImportResult:
+    def import_assets_from_excel(self, content: bytes, user_email: str, file_name: str | None = None) -> ImportResult:
+        uploaded_at = now_utc()
+        normalized_file_name = clean_optional(file_name) or f"import-{uploaded_at.strftime('%Y%m%d-%H%M%S')}.xlsx"
+        file_hash = hashlib.sha256(content).hexdigest()
+        total_rows = 0
+
         self._begin_bulk_write()
         try:
+            existing_import = self._query_one(
+                """
+                SELECT * FROM import_files
+                WHERE file_hash = ? AND status IN ('completed', 'duplicate_skipped')
+                ORDER BY uploaded_at DESC
+                LIMIT 1
+                """,
+                (file_hash,),
+            )
+            if existing_import:
+                existing_meta = row_to_import_file(existing_import)
+                warnings = [
+                    (
+                        "Ayni dosya daha once yuklenmis. Mukerrer kayit olusmamasi icin import atlandi. "
+                        f"Son yukleme: {existing_meta.uploaded_at.isoformat()}"
+                    )
+                ]
+                self._record_import_file(
+                    file_name=normalized_file_name,
+                    file_hash=file_hash,
+                    uploaded_by=user_email,
+                    uploaded_at=uploaded_at,
+                    total_rows=existing_meta.total_rows,
+                    imported_count=0,
+                    updated_count=0,
+                    skipped_count=existing_meta.total_rows,
+                    warnings=warnings,
+                    status="duplicate_skipped",
+                    error_message=None,
+                )
+                self.add_log(user_email, "excel_import_duplicate", f"{normalized_file_name} dosyasi tekrar yuklenmek istendi.")
+                return ImportResult(imported_count=0, updated_count=0, skipped_count=existing_meta.total_rows, warnings=warnings)
+
             frame = pd.read_excel(BytesIO(content))
             frame = self._map_excel_columns(frame)
+            total_rows = int(len(frame.index))
 
             required_columns = {"demirbas_id"}
             missing = required_columns - set(frame.columns)
@@ -1130,6 +1323,20 @@ class FirestoreService:
                 else:
                     warnings.append(f"{location_override_count} satirda lokasyon kurali nedeniyle 'Genel Merkez' uygulandi.")
 
+            self._record_import_file(
+                file_name=normalized_file_name,
+                file_hash=file_hash,
+                uploaded_by=user_email,
+                uploaded_at=uploaded_at,
+                total_rows=total_rows,
+                imported_count=imported_count,
+                updated_count=updated_count,
+                skipped_count=skipped_count,
+                warnings=warnings,
+                status="completed",
+                error_message=None,
+            )
+
             self.add_log(
                 user_email,
                 "excel_import",
@@ -1141,6 +1348,25 @@ class FirestoreService:
                 skipped_count=skipped_count,
                 warnings=warnings[:30],
             )
+        except Exception as exc:
+            error_message = str(exc)
+            try:
+                self._record_import_file(
+                    file_name=normalized_file_name,
+                    file_hash=file_hash,
+                    uploaded_by=user_email,
+                    uploaded_at=uploaded_at,
+                    total_rows=total_rows,
+                    imported_count=0,
+                    updated_count=0,
+                    skipped_count=total_rows,
+                    warnings=[error_message] if error_message else [],
+                    status="failed",
+                    error_message=error_message,
+                )
+            except Exception:
+                pass
+            raise
         finally:
             self._end_bulk_write()
 

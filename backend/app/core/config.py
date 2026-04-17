@@ -1,6 +1,7 @@
 from functools import lru_cache
 
 from pydantic import Field
+from pydantic import ValidationInfo
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -46,6 +47,7 @@ class Settings(BaseSettings):
         "firebase_private_key_id",
         "firebase_client_email",
         "firebase_client_id",
+        "firebase_private_key",
         "firebase_auth_uri",
         "firebase_token_uri",
         "firebase_auth_provider_cert_url",
@@ -55,10 +57,20 @@ class Settings(BaseSettings):
         mode="before",
     )
     @classmethod
-    def strip_string_fields(cls, value: str | None) -> str | None:
+    def strip_string_fields(cls, value: str | None, info: ValidationInfo) -> str | None:
         if isinstance(value, str):
             value = value.strip()
-            return value or None
+            if not value:
+                return None
+
+            # Vercel/Firebase env imports may accidentally contain escaped CRLF suffixes ("\r\n").
+            # Normalize them so bucket/project/url values remain valid in runtime.
+            if info.field_name == "firebase_private_key":
+                value = value.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\r\n", "\n").replace("\r", "\n")
+                return value.strip() or None
+
+            value = value.replace("\\r\\n", "").replace("\\n", "").replace("\\r", "")
+            return value.strip() or None
         return value
 
 
