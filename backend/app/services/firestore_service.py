@@ -849,7 +849,26 @@ class FirestoreService:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
         return path
 
+    def _table_exists(self, table_name: str) -> bool:
+        cur = self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+            (table_name,),
+        )
+        row = cur.fetchone()
+        cur.close()
+        return row is not None
+
     def _init_schema(self) -> None:
+        required_tables = (
+            "assets",
+            "maintenance",
+            "stock",
+            "logs",
+            "personnel",
+            "assignments",
+            "import_files",
+            "exit_reports",
+        )
         schema = """
         CREATE TABLE IF NOT EXISTS assets (
             id TEXT PRIMARY KEY,
@@ -968,8 +987,12 @@ class FirestoreService:
         CREATE INDEX IF NOT EXISTS idx_exit_reports_personnel ON exit_reports(personnel_id, created_at DESC);
         """
         with self._lock:
+            schema_changed = any(not self._table_exists(table_name) for table_name in required_tables)
             self.conn.executescript(schema)
             self.conn.commit()
+            if schema_changed:
+                # Ensure newly created tables/indexes are propagated to durable storage.
+                self._cloud_dirty = True
 
     def _query_all(self, query: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         with self._lock:
@@ -991,7 +1014,15 @@ class FirestoreService:
         with self._lock:
             if self._bulk_write_depth == 0:
                 self._sync_from_remote(force=True)
-            self.conn.execute(query, params)
+            try:
+                self.conn.execute(query, params)
+            except sqlite3.OperationalError as exc:
+                # Cloud snapshot can lag behind the latest schema during rollout.
+                # Re-apply schema once and retry the statement.
+                if "no such table" not in str(exc).lower():
+                    raise
+                self._init_schema()
+                self.conn.execute(query, params)
             self.conn.commit()
             self._cloud_dirty = True
             if self._bulk_write_depth == 0:
