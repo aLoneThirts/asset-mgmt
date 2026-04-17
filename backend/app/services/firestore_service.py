@@ -127,6 +127,51 @@ def clean_assignment_name(value: Any) -> str | None:
     return text
 
 
+def extract_department_from_location(value: Any) -> str | None:
+    text = clean_optional(value)
+    if not text:
+        return None
+
+    raw = text.replace("\\", "/").strip()
+    if raw in {"-", "--", "---", "."}:
+        return None
+
+    # Most exports duplicate path with "/" (e.g. "...-UHM/22.Kat-Allianz Tower")
+    primary = raw.split("/", 1)[0].strip()
+    if not primary:
+        return None
+
+    parts = [segment.strip() for segment in re.split(r"\s*-\s*", primary) if clean_optional(segment)]
+    if not parts:
+        return None
+
+    ignored_exact = {
+        "allianz",
+        "tower",
+        "allianz_tower",
+        "allianz_tower_merkez",
+        "merkez",
+        "genel_merkez",
+        "genel_merkez_lokasyon",
+    }
+
+    for candidate in reversed(parts):
+        normalized = normalize_text(candidate)
+        if not normalized:
+            continue
+        if normalized in ignored_exact:
+            continue
+        if "allianz" in normalized and "tower" in normalized:
+            continue
+        if re.fullmatch(r"\d+_kat", normalized) or re.fullmatch(r"kat_\d+", normalized):
+            continue
+        if normalized.endswith("_kat"):
+            continue
+        return candidate
+
+    return None
+
+
 def parse_datetime(value: Any) -> datetime | None:
     if value is None:
         return None
@@ -723,10 +768,23 @@ class FirestoreService:
         rows = self._query_all(query)
         return [row_to_assignment(row) for row in rows]
 
-    def _ensure_import_personnel(self, full_name: str, cache: dict[str, Personnel]) -> Personnel:
+    def _ensure_import_personnel(
+        self,
+        full_name: str,
+        cache: dict[str, Personnel],
+        department: str | None = None,
+    ) -> Personnel:
         key = normalize_text(full_name)
         existing = cache.get(key)
         if existing:
+            new_department = clean_optional(department)
+            if new_department and existing.department != new_department:
+                self._execute(
+                    "UPDATE personnel SET department = ?, updated_at = ? WHERE id = ?",
+                    (new_department, to_db_datetime(now_utc()), existing.id),
+                )
+                existing = row_to_personnel(self._query_one("SELECT * FROM personnel WHERE id = ?", (existing.id,)))
+                cache[key] = existing
             return existing
 
         personnel_id = new_id("prs_")
@@ -742,7 +800,7 @@ class FirestoreService:
                 personnel_id,
                 full_name,
                 None,
-                None,
+                clean_optional(department),
                 None,
                 "Genel Merkez",
                 None,
@@ -761,15 +819,22 @@ class FirestoreService:
         asset_name: str,
         asset_code: str,
         personnel_name: str,
+        department: str | None,
         assigned_at: datetime,
         user_email: str,
         personnel_cache: dict[str, Personnel],
         active_assignments_by_asset: dict[str, AssignmentRecord],
     ) -> None:
-        personnel = self._ensure_import_personnel(personnel_name, personnel_cache)
+        personnel = self._ensure_import_personnel(personnel_name, personnel_cache, department=department)
         current_assignment = active_assignments_by_asset.get(asset_id)
+        effective_department = clean_optional(department) or personnel.department
 
         if current_assignment and normalize_text(current_assignment.personnel_name) == normalize_text(personnel.full_name):
+            assignment_department = effective_department or current_assignment.department
+            self._execute(
+                "UPDATE assignments SET department = ? WHERE id = ?",
+                (assignment_department, current_assignment.id),
+            )
             self._execute(
                 """
                 UPDATE assets
@@ -778,12 +843,27 @@ class FirestoreService:
                 """,
                 (
                     personnel.full_name,
-                    personnel.department,
+                    assignment_department,
                     current_assignment.id,
                     to_db_datetime(now_utc()),
                     asset_id,
                     asset_id,
                 ),
+            )
+            active_assignments_by_asset[asset_id] = AssignmentRecord(
+                id=current_assignment.id,
+                asset_id=current_assignment.asset_id,
+                asset_name=current_assignment.asset_name,
+                asset_code=current_assignment.asset_code,
+                personnel_id=current_assignment.personnel_id,
+                personnel_name=current_assignment.personnel_name,
+                department=assignment_department,
+                note=current_assignment.note,
+                assigned_by=current_assignment.assigned_by,
+                assigned_at=current_assignment.assigned_at,
+                returned_at=current_assignment.returned_at,
+                returned_by=current_assignment.returned_by,
+                is_active=current_assignment.is_active,
             )
             return
 
@@ -794,6 +874,7 @@ class FirestoreService:
             )
 
         assignment_id = new_id("asn_")
+        assignment_department = effective_department
         self._execute(
             """
             INSERT INTO assignments (
@@ -808,7 +889,7 @@ class FirestoreService:
                 asset_code,
                 personnel.id,
                 personnel.full_name,
-                personnel.department,
+                assignment_department,
                 "Excel import zimmet senkronizasyonu",
                 user_email,
                 to_db_datetime(assigned_at),
@@ -825,7 +906,7 @@ class FirestoreService:
             """,
             (
                 personnel.full_name,
-                personnel.department,
+                assignment_department,
                 assignment_id,
                 to_db_datetime(now_utc()),
                 asset_id,
@@ -839,7 +920,7 @@ class FirestoreService:
             asset_code=asset_code,
             personnel_id=personnel.id,
             personnel_name=personnel.full_name,
-            department=personnel.department,
+            department=assignment_department,
             note="Excel import zimmet senkronizasyonu",
             assigned_by=user_email,
             assigned_at=assigned_at,
@@ -919,7 +1000,7 @@ class FirestoreService:
             active_assignments_by_asset = {
                 item.asset_id: item for item in self._list_assignments_raw(active_only=True)
             }
-            assignment_sync_rows: dict[str, tuple[str, str, datetime]] = {}
+            assignment_sync_rows: dict[str, tuple[str, str, str | None, datetime]] = {}
             assignment_clear_rows: set[str] = set()
 
             location_override_count = 0
@@ -937,6 +1018,7 @@ class FirestoreService:
                         continue
 
                     location = clean_optional(row.get("lokasyon")) or "Genel Merkez"
+                    inferred_department = extract_department_from_location(location)
                     if normalize_text(location) not in {"genel_merkez", "merkez", "genel_merkez_lokasyon"}:
                         location_override_count += 1
                         if len(location_examples) < 3 and location not in location_examples:
@@ -971,7 +1053,10 @@ class FirestoreService:
                                 to_db_datetime(added_at),
                                 to_db_datetime(now_utc()),
                                 zimmet_name,
-                                existing_assignment.department if (zimmet_name and existing_assignment) else None,
+                                (
+                                    inferred_department
+                                    or (existing_assignment.department if (zimmet_name and existing_assignment) else None)
+                                ),
                                 existing_assignment.id if (zimmet_name and existing_assignment) else None,
                                 existing_asset.id,
                                 existing_asset.asset_id,
@@ -999,25 +1084,29 @@ class FirestoreService:
                                 user_email,
                                 to_db_datetime(now_utc()),
                                 zimmet_name,
-                                existing_assignment.department if (zimmet_name and existing_assignment) else None,
+                                (
+                                    inferred_department
+                                    or (existing_assignment.department if (zimmet_name and existing_assignment) else None)
+                                ),
                                 existing_assignment.id if (zimmet_name and existing_assignment) else None,
                             ),
                         )
                         imported_count += 1
 
                     if zimmet_name:
-                        assignment_sync_rows[asset_id] = (name, zimmet_name, added_at)
+                        assignment_sync_rows[asset_id] = (name, zimmet_name, inferred_department, added_at)
                         assignment_clear_rows.discard(asset_id)
                     elif existing_assignment or (existing_asset and (existing_asset.assignment_id or existing_asset.assigned_to)):
                         assignment_clear_rows.add(asset_id)
                         assignment_sync_rows.pop(asset_id, None)
 
-            for asset_id, (asset_name, zimmet_name, assigned_at) in assignment_sync_rows.items():
+            for asset_id, (asset_name, zimmet_name, inferred_department, assigned_at) in assignment_sync_rows.items():
                 self._sync_import_assignment(
                     asset_id=asset_id,
                     asset_name=asset_name,
                     asset_code=asset_id,
                     personnel_name=zimmet_name,
+                    department=inferred_department,
                     assigned_at=assigned_at,
                     user_email=user_email,
                     personnel_cache=personnel_cache,
