@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import toast from "react-hot-toast";
 
+import { Pagination } from "@/components/ui/Pagination";
 import {
   createAsset,
   deleteAsset,
@@ -17,6 +18,7 @@ const STATUS_COLORS: Record<string, string> = {
   Arizali: "bg-red-100 text-red-700",
   Hurda: "bg-slate-100 text-slate-700",
 };
+const PAGE_SIZE = 25;
 
 export function AssetsPage() {
   const qc = useQueryClient();
@@ -26,6 +28,7 @@ export function AssetsPage() {
   const [sortBy, setSortBy] = useState<"asset_id" | "name" | "status">("name");
   const [modal, setModal] = useState<"add" | "edit" | null>(null);
   const [selected, setSelected] = useState<Asset | null>(null);
+  const [page, setPage] = useState(1);
 
   const { data: assets = [], isLoading } = useQuery({
     queryKey: ["assets"],
@@ -55,6 +58,22 @@ export function AssetsPage() {
       return left.name.localeCompare(right.name);
     });
   }, [assets, filterCategory, filterStatus, search, sortBy]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pagedAssets = useMemo(() => {
+    const start = (page - 1) * PAGE_SIZE;
+    return filtered.slice(start, start + PAGE_SIZE);
+  }, [filtered, page]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, filterStatus, filterCategory, sortBy]);
+
+  useEffect(() => {
+    if (page > totalPages) {
+      setPage(totalPages);
+    }
+  }, [page, totalPages]);
 
   async function handleDelete(asset: Asset) {
     if (!confirm(`${asset.asset_id} numarali demirbas silinsin mi?`)) return;
@@ -168,7 +187,7 @@ export function AssetsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.map((asset) => (
+              {pagedAssets.map((asset) => (
                 <tr key={asset.id} className="transition hover:bg-slate-50">
                   <td className="px-4 py-3 font-mono text-xs text-slate-600">{asset.asset_id}</td>
                   <td className="px-4 py-3 font-medium text-slate-900">{asset.name}</td>
@@ -216,6 +235,15 @@ export function AssetsPage() {
               ))}
             </tbody>
           </table>
+        )}
+
+        {!isLoading && filtered.length > 0 && (
+          <Pagination
+            currentPage={page}
+            totalItems={filtered.length}
+            pageSize={PAGE_SIZE}
+            onPageChange={setPage}
+          />
         )}
       </div>
 

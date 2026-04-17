@@ -1,9 +1,10 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ContactRound, Plus, Trash2, X } from "lucide-react";
 import toast from "react-hot-toast";
 
+import { Pagination } from "@/components/ui/Pagination";
 import {
   createAssignment,
   createPersonnel,
@@ -18,10 +19,15 @@ import {
   type PersonnelPayload,
 } from "@/lib/firestore";
 
+const PAGE_SIZE = 25;
+
 export function AssignmentsPage() {
   const qc = useQueryClient();
   const [personnelModal, setPersonnelModal] = useState(false);
   const [assignmentModal, setAssignmentModal] = useState(false);
+  const [personnelPage, setPersonnelPage] = useState(1);
+  const [activeAssignmentsPage, setActiveAssignmentsPage] = useState(1);
+  const [historyPage, setHistoryPage] = useState(1);
 
   const { data: personnel = [], isLoading: personnelLoading } = useQuery({
     queryKey: ["personnel"],
@@ -37,6 +43,37 @@ export function AssignmentsPage() {
     () => assignments.filter((item) => item.is_active),
     [assignments],
   );
+
+  const personnelTotalPages = Math.max(1, Math.ceil(personnel.length / PAGE_SIZE));
+  const activeTotalPages = Math.max(1, Math.ceil(activeAssignments.length / PAGE_SIZE));
+  const historyTotalPages = Math.max(1, Math.ceil(assignments.length / PAGE_SIZE));
+
+  const pagedPersonnel = useMemo(() => {
+    const start = (personnelPage - 1) * PAGE_SIZE;
+    return personnel.slice(start, start + PAGE_SIZE);
+  }, [personnel, personnelPage]);
+
+  const pagedActiveAssignments = useMemo(() => {
+    const start = (activeAssignmentsPage - 1) * PAGE_SIZE;
+    return activeAssignments.slice(start, start + PAGE_SIZE);
+  }, [activeAssignments, activeAssignmentsPage]);
+
+  const pagedHistoryAssignments = useMemo(() => {
+    const start = (historyPage - 1) * PAGE_SIZE;
+    return assignments.slice(start, start + PAGE_SIZE);
+  }, [assignments, historyPage]);
+
+  useEffect(() => {
+    if (personnelPage > personnelTotalPages) setPersonnelPage(personnelTotalPages);
+  }, [personnelPage, personnelTotalPages]);
+
+  useEffect(() => {
+    if (activeAssignmentsPage > activeTotalPages) setActiveAssignmentsPage(activeTotalPages);
+  }, [activeAssignmentsPage, activeTotalPages]);
+
+  useEffect(() => {
+    if (historyPage > historyTotalPages) setHistoryPage(historyTotalPages);
+  }, [historyPage, historyTotalPages]);
 
   async function handleDeletePersonnel(item: Personnel) {
     if (!confirm(`${item.full_name} personel kaydi silinsin mi?`)) return;
@@ -108,7 +145,7 @@ export function AssignmentsPage() {
             ) : personnel.length === 0 ? (
               <p className="px-6 py-8 text-sm text-slate-400">Kayitli personel bulunmuyor.</p>
             ) : (
-              personnel.map((item) => (
+              pagedPersonnel.map((item) => (
                 <div key={item.id} className="flex items-start justify-between gap-4 px-6 py-4">
                   <div>
                     <p className="font-medium text-slate-900">{item.full_name}</p>
@@ -133,6 +170,14 @@ export function AssignmentsPage() {
               ))
             )}
           </div>
+          {!personnelLoading && personnel.length > 0 && (
+            <Pagination
+              currentPage={personnelPage}
+              totalItems={personnel.length}
+              pageSize={PAGE_SIZE}
+              onPageChange={setPersonnelPage}
+            />
+          )}
         </section>
 
         <section className="overflow-hidden rounded-2xl border border-slate-100 bg-white shadow-sm">
@@ -149,7 +194,7 @@ export function AssignmentsPage() {
             ) : activeAssignments.length === 0 ? (
               <p className="px-6 py-8 text-sm text-slate-400">Aktif zimmet bulunmuyor.</p>
             ) : (
-              activeAssignments.map((item) => (
+              pagedActiveAssignments.map((item) => (
                 <div key={item.id} className="flex items-start justify-between gap-4 px-6 py-4">
                   <div>
                     <p className="font-medium text-slate-900">{item.asset_name}</p>
@@ -171,6 +216,14 @@ export function AssignmentsPage() {
               ))
             )}
           </div>
+          {!assignmentLoading && activeAssignments.length > 0 && (
+            <Pagination
+              currentPage={activeAssignmentsPage}
+              totalItems={activeAssignments.length}
+              pageSize={PAGE_SIZE}
+              onPageChange={setActiveAssignmentsPage}
+            />
+          )}
         </section>
       </div>
 
@@ -195,7 +248,7 @@ export function AssignmentsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {assignments.map((item) => (
+              {pagedHistoryAssignments.map((item) => (
                 <tr key={item.id}>
                   <td className="px-4 py-3">
                     <p className="font-medium text-slate-900">{item.asset_name}</p>
@@ -217,6 +270,14 @@ export function AssignmentsPage() {
               ))}
             </tbody>
           </table>
+        )}
+        {!assignmentLoading && assignments.length > 0 && (
+          <Pagination
+            currentPage={historyPage}
+            totalItems={assignments.length}
+            pageSize={PAGE_SIZE}
+            onPageChange={setHistoryPage}
+          />
         )}
       </section>
 
