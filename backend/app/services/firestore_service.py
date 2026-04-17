@@ -14,15 +14,17 @@ import os
 import re
 import sqlite3
 import threading
+import zlib
 from typing import Any
 from uuid import uuid4
 
 import pandas as pd
+from firebase_admin import firestore as firebase_firestore
 from firebase_admin import storage as firebase_storage
 
 try:
     from backend.app.core.config import get_settings
-    from backend.app.core.firebase_admin import get_firebase_app
+    from backend.app.core.firebase_admin import get_firebase_app, get_firestore_client
     from backend.app.models.schemas import (
         Asset,
         AssetCreate,
@@ -50,7 +52,7 @@ try:
     )
 except ModuleNotFoundError:
     from app.core.config import get_settings
-    from app.core.firebase_admin import get_firebase_app
+    from app.core.firebase_admin import get_firebase_app, get_firestore_client
     from app.models.schemas import (
         Asset,
         AssetCreate,
@@ -364,18 +366,26 @@ class FirestoreService:
         self._cloud_blob_name = "asset-mgmt/sqlite/asset_mgmt.db"
         self._cloud_generation: int | None = None
         self._last_cloud_pull_at: datetime | None = None
+        self._firestore_sync_enabled = False
+        self._firestore_generation: str | None = None
+        self._last_firestore_pull_at: datetime | None = None
+        self._firestore_sync_collection = "_asset_mgmt_sync"
+        self._firestore_sync_document = "sqlite_meta"
+        self._firestore_chunk_size = 700 * 1024
         self._cloud_dirty = False
         self._bulk_write_depth = 0
         if self._requires_durable_storage and not self._cloud_sync_enabled:
-            raise RuntimeError(
-                "Kalici veri saklama aktif degil. Vercel uzerinde FIREBASE_STORAGE_BUCKET veya kalici DATABASE_URL tanimlanmali."
-            )
+            if not self._activate_firestore_fallback():
+                raise RuntimeError(
+                    "Kalici veri saklama aktif degil. Vercel uzerinde Firebase Storage bucket veya kalici DATABASE_URL tanimlanmali."
+                )
         self._open_connection()
         if self._cloud_sync_enabled:
             self._sync_from_cloud(force=True)
+        elif self._firestore_sync_enabled:
+            self._sync_from_firestore(force=True)
         self._init_schema()
-        if self._cloud_sync_enabled:
-            self._sync_to_cloud()
+        self._sync_to_remote()
 
     def _open_connection(self) -> None:
         self.conn = sqlite3.connect(self.database_path, check_same_thread=False)
@@ -417,6 +427,160 @@ class FirestoreService:
             if candidate not in ordered:
                 ordered.append(candidate)
         return ordered
+
+    def _activate_firestore_fallback(self) -> bool:
+        if self._firestore_sync_enabled:
+            return True
+        try:
+            # Validate Firestore client is available before enabling fallback sync.
+            get_firestore_client()
+        except Exception:
+            return False
+        self._firestore_sync_enabled = True
+        self._cloud_sync_enabled = False
+        return True
+
+    def _firestore_meta_ref(self):
+        return get_firestore_client().collection(self._firestore_sync_collection).document(self._firestore_sync_document)
+
+    def _sync_from_firestore(self, force: bool = False) -> None:
+        if not self._firestore_sync_enabled:
+            return
+        if self._cloud_dirty and not force:
+            return
+
+        now = now_utc()
+        if (
+            not force
+            and self._last_firestore_pull_at is not None
+            and (now - self._last_firestore_pull_at).total_seconds() < 2
+        ):
+            return
+        self._last_firestore_pull_at = now
+
+        temp_path = f"{self.database_path}.firestore.download"
+        try:
+            meta_ref = self._firestore_meta_ref()
+            meta_snapshot = meta_ref.get()
+            if not meta_snapshot.exists:
+                return
+
+            meta = meta_snapshot.to_dict() or {}
+            generation = str(meta.get("generation") or "")
+            chunk_count = int(meta.get("chunk_count") or 0)
+            if chunk_count <= 0:
+                return
+            if not force and generation and generation == self._firestore_generation:
+                return
+
+            payload = bytearray()
+            chunks_ref = meta_ref.collection("chunks")
+            for index in range(chunk_count):
+                chunk_snapshot = chunks_ref.document(f"{index:06d}").get()
+                if not chunk_snapshot.exists:
+                    raise RuntimeError("Kalici veri parcasi eksik gorundu.")
+                chunk_data = (chunk_snapshot.to_dict() or {}).get("data")
+                if not isinstance(chunk_data, (bytes, bytearray)):
+                    raise RuntimeError("Kalici veri parcasi okunamadi.")
+                payload.extend(chunk_data)
+
+            raw_content = bytes(payload)
+            if bool(meta.get("compressed")):
+                raw_content = zlib.decompress(raw_content)
+
+            checksum = str(meta.get("checksum") or "")
+            if checksum and hashlib.sha256(raw_content).hexdigest() != checksum:
+                raise RuntimeError("Kalici veri dogrulama hatasi olustu.")
+
+            with open(temp_path, "wb") as stream:
+                stream.write(raw_content)
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            os.replace(temp_path, self.database_path)
+            self._open_connection()
+            self._firestore_generation = generation or self._firestore_generation
+        except Exception as exc:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+            if self._requires_durable_storage:
+                raise RuntimeError("Kalici veri senkronizasyonu basarisiz oldu. Lutfen tekrar deneyin.") from exc
+
+    def _sync_to_firestore(self) -> None:
+        if not self._firestore_sync_enabled:
+            return
+        if not self._cloud_dirty:
+            return
+
+        try:
+            raw_content = Path(self.database_path).read_bytes()
+            checksum = hashlib.sha256(raw_content).hexdigest()
+            compressed = zlib.compress(raw_content, level=6)
+            use_compressed = len(compressed) < len(raw_content)
+            payload = compressed if use_compressed else raw_content
+
+            chunks = [
+                payload[index:index + self._firestore_chunk_size]
+                for index in range(0, len(payload), self._firestore_chunk_size)
+            ] or [b""]
+
+            if len(chunks) > 450:
+                raise RuntimeError("Veri boyutu Firestore yedekleme sinirini asti.")
+
+            generation = uuid4().hex
+            client = get_firestore_client()
+            meta_ref = self._firestore_meta_ref()
+            chunks_ref = meta_ref.collection("chunks")
+
+            batch = client.batch()
+            for index, chunk in enumerate(chunks):
+                batch.set(
+                    chunks_ref.document(f"{index:06d}"),
+                    {
+                        "index": index,
+                        "generation": generation,
+                        "data": bytes(chunk),
+                        "size": len(chunk),
+                    },
+                )
+
+            batch.set(
+                meta_ref,
+                {
+                    "generation": generation,
+                    "chunk_count": len(chunks),
+                    "compressed": use_compressed,
+                    "payload_size": len(payload),
+                    "raw_size": len(raw_content),
+                    "checksum": checksum,
+                    "updated_at": firebase_firestore.SERVER_TIMESTAMP,
+                    "source": "firestore_snapshot_v1",
+                },
+                merge=False,
+            )
+            batch.commit()
+            self._firestore_generation = generation
+            self._cloud_dirty = False
+        except Exception as exc:
+            raise RuntimeError("Veri senkronizasyonu basarisiz oldu. Lutfen tekrar deneyin.") from exc
+
+    def _sync_from_remote(self, force: bool = False) -> None:
+        if self._cloud_sync_enabled:
+            self._sync_from_cloud(force=force)
+            return
+        if self._firestore_sync_enabled:
+            self._sync_from_firestore(force=force)
+
+    def _sync_to_remote(self) -> None:
+        if self._cloud_sync_enabled:
+            self._sync_to_cloud()
+            return
+        if self._firestore_sync_enabled:
+            self._sync_to_firestore()
 
     def _get_cloud_blob(self, bucket_name: str | None = None):
         if not self._cloud_sync_enabled:
@@ -502,6 +666,9 @@ class FirestoreService:
                 return
 
         if self._requires_durable_storage and last_error is not None:
+            if self._is_cloud_bucket_missing(last_error) and self._activate_firestore_fallback():
+                self._sync_from_firestore(force=True)
+                return
             raise RuntimeError("Kalici depolama bucket bulunamadi. Firebase Storage bucket adini kontrol edin.") from last_error
 
     def _is_cloud_generation_conflict(self, exc: Exception) -> bool:
@@ -582,6 +749,9 @@ class FirestoreService:
                 raise RuntimeError("Veri senkronizasyonu basarisiz oldu. Lutfen tekrar deneyin.") from exc
 
         if self._requires_durable_storage and last_error is not None:
+            if self._is_cloud_bucket_missing(last_error) and self._activate_firestore_fallback():
+                self._sync_to_firestore()
+                return
             raise RuntimeError("Kalici depolama bucket bulunamadi. Firebase Storage bucket adini kontrol edin.") from last_error
 
     def _begin_bulk_write(self) -> None:
@@ -592,7 +762,7 @@ class FirestoreService:
         with self._lock:
             self._bulk_write_depth = max(0, self._bulk_write_depth - 1)
             if self._bulk_write_depth == 0:
-                self._sync_to_cloud()
+                self._sync_to_remote()
 
     def _resolve_database_path(self, database_url: str | None) -> str:
         db_url = (database_url or "").strip()
@@ -720,7 +890,7 @@ class FirestoreService:
 
     def _query_all(self, query: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         with self._lock:
-            self._sync_from_cloud()
+            self._sync_from_remote()
             cur = self.conn.execute(query, params)
             rows = cur.fetchall()
             cur.close()
@@ -728,7 +898,7 @@ class FirestoreService:
 
     def _query_one(self, query: str, params: tuple[Any, ...] = ()) -> sqlite3.Row | None:
         with self._lock:
-            self._sync_from_cloud()
+            self._sync_from_remote()
             cur = self.conn.execute(query, params)
             row = cur.fetchone()
             cur.close()
@@ -737,25 +907,25 @@ class FirestoreService:
     def _execute(self, query: str, params: tuple[Any, ...] = ()) -> None:
         with self._lock:
             if self._bulk_write_depth == 0:
-                self._sync_from_cloud(force=True)
+                self._sync_from_remote(force=True)
             self.conn.execute(query, params)
             self.conn.commit()
             self._cloud_dirty = True
             if self._bulk_write_depth == 0:
-                self._sync_to_cloud()
+                self._sync_to_remote()
 
     @contextmanager
     def _transaction(self):
         with self._lock:
             try:
                 if self._bulk_write_depth == 0:
-                    self._sync_from_cloud(force=True)
+                    self._sync_from_remote(force=True)
                 self.conn.execute("BEGIN")
                 yield self.conn
                 self.conn.commit()
                 self._cloud_dirty = True
                 if self._bulk_write_depth == 0:
-                    self._sync_to_cloud()
+                    self._sync_to_remote()
             except Exception:
                 self.conn.rollback()
                 raise
