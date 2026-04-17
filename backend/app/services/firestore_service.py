@@ -16,9 +16,11 @@ from typing import Any
 from uuid import uuid4
 
 import pandas as pd
+from firebase_admin import storage as firebase_storage
 
 try:
     from backend.app.core.config import get_settings
+    from backend.app.core.firebase_admin import get_firebase_app
     from backend.app.models.schemas import (
         Asset,
         AssetCreate,
@@ -45,6 +47,7 @@ try:
     )
 except ModuleNotFoundError:
     from app.core.config import get_settings
+    from app.core.firebase_admin import get_firebase_app
     from app.models.schemas import (
         Asset,
         AssetCreate,
@@ -288,10 +291,118 @@ class FirestoreService:
         settings = get_settings()
         self.database_path = self._resolve_database_path(settings.database_url)
         self._lock = threading.RLock()
+        self._cloud_sync_enabled = bool(os.getenv("VERCEL") and settings.firebase_storage_bucket)
+        self._cloud_bucket_name = settings.firebase_storage_bucket or ""
+        self._cloud_blob_name = "asset-mgmt/sqlite/asset_mgmt.db"
+        self._cloud_generation: int | None = None
+        self._last_cloud_pull_at: datetime | None = None
+        self._cloud_dirty = False
+        self._bulk_write_depth = 0
+        self._open_connection()
+        if self._cloud_sync_enabled:
+            self._sync_from_cloud(force=True)
+        self._init_schema()
+        if self._cloud_sync_enabled:
+            self._sync_to_cloud()
+
+    def _open_connection(self) -> None:
         self.conn = sqlite3.connect(self.database_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
-        self._init_schema()
+
+    def _get_cloud_blob(self):
+        if not self._cloud_sync_enabled:
+            return None
+        try:
+            app = get_firebase_app()
+            bucket = firebase_storage.bucket(name=self._cloud_bucket_name, app=app)
+            return bucket.blob(self._cloud_blob_name)
+        except Exception:
+            return None
+
+    def _sync_from_cloud(self, force: bool = False) -> None:
+        if not self._cloud_sync_enabled:
+            return
+
+        now = now_utc()
+        if (
+            not force
+            and self._last_cloud_pull_at is not None
+            and (now - self._last_cloud_pull_at).total_seconds() < 2
+        ):
+            return
+        self._last_cloud_pull_at = now
+
+        blob = self._get_cloud_blob()
+        if not blob:
+            return
+
+        temp_path = f"{self.database_path}.download"
+        try:
+            blob.reload()
+            generation = int(blob.generation) if blob.generation else None
+            if not force and generation is not None and generation == self._cloud_generation:
+                return
+            blob.download_to_filename(temp_path)
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            os.replace(temp_path, self.database_path)
+            self._open_connection()
+            self._cloud_generation = generation
+        except Exception:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+
+    def _sync_to_cloud(self) -> None:
+        if not self._cloud_sync_enabled:
+            return
+        if not self._cloud_dirty:
+            return
+        blob = self._get_cloud_blob()
+        if not blob:
+            return
+
+        try:
+            if self._cloud_generation is not None:
+                blob.upload_from_filename(
+                    self.database_path,
+                    content_type="application/x-sqlite3",
+                    if_generation_match=self._cloud_generation,
+                )
+            else:
+                blob.upload_from_filename(
+                    self.database_path,
+                    content_type="application/x-sqlite3",
+                )
+            blob.reload()
+            self._cloud_generation = int(blob.generation) if blob.generation else self._cloud_generation
+            self._cloud_dirty = False
+        except Exception:
+            try:
+                blob.upload_from_filename(
+                    self.database_path,
+                    content_type="application/x-sqlite3",
+                )
+                blob.reload()
+                self._cloud_generation = int(blob.generation) if blob.generation else self._cloud_generation
+                self._cloud_dirty = False
+            except Exception:
+                pass
+
+    def _begin_bulk_write(self) -> None:
+        with self._lock:
+            self._bulk_write_depth += 1
+
+    def _end_bulk_write(self) -> None:
+        with self._lock:
+            self._bulk_write_depth = max(0, self._bulk_write_depth - 1)
+            if self._bulk_write_depth == 0:
+                self._sync_to_cloud()
 
     def _resolve_database_path(self, database_url: str | None) -> str:
         db_url = (database_url or "").strip()
@@ -401,6 +512,7 @@ class FirestoreService:
 
     def _query_all(self, query: str, params: tuple[Any, ...] = ()) -> list[sqlite3.Row]:
         with self._lock:
+            self._sync_from_cloud()
             cur = self.conn.execute(query, params)
             rows = cur.fetchall()
             cur.close()
@@ -408,6 +520,7 @@ class FirestoreService:
 
     def _query_one(self, query: str, params: tuple[Any, ...] = ()) -> sqlite3.Row | None:
         with self._lock:
+            self._sync_from_cloud()
             cur = self.conn.execute(query, params)
             row = cur.fetchone()
             cur.close()
@@ -415,16 +528,26 @@ class FirestoreService:
 
     def _execute(self, query: str, params: tuple[Any, ...] = ()) -> None:
         with self._lock:
+            if self._bulk_write_depth == 0:
+                self._sync_from_cloud()
             self.conn.execute(query, params)
             self.conn.commit()
+            self._cloud_dirty = True
+            if self._bulk_write_depth == 0:
+                self._sync_to_cloud()
 
     @contextmanager
     def _transaction(self):
         with self._lock:
             try:
+                if self._bulk_write_depth == 0:
+                    self._sync_from_cloud()
                 self.conn.execute("BEGIN")
                 yield self.conn
                 self.conn.commit()
+                self._cloud_dirty = True
+                if self._bulk_write_depth == 0:
+                    self._sync_to_cloud()
             except Exception:
                 self.conn.rollback()
                 raise
@@ -760,157 +883,161 @@ class FirestoreService:
                 )
 
     def import_assets_from_excel(self, content: bytes, user_email: str) -> ImportResult:
-        frame = pd.read_excel(BytesIO(content))
-        frame = self._map_excel_columns(frame)
+        self._begin_bulk_write()
+        try:
+            frame = pd.read_excel(BytesIO(content))
+            frame = self._map_excel_columns(frame)
 
-        required_columns = {"demirbas_id"}
-        missing = required_columns - set(frame.columns)
-        if missing:
-            raise ValueError(f"Eksik zorunlu kolonlar: {', '.join(sorted(missing))}")
+            required_columns = {"demirbas_id"}
+            missing = required_columns - set(frame.columns)
+            if missing:
+                raise ValueError(f"Eksik zorunlu kolonlar: {', '.join(sorted(missing))}")
 
-        warnings: list[str] = []
-        imported_count = 0
-        updated_count = 0
-        skipped_count = 0
+            warnings: list[str] = []
+            imported_count = 0
+            updated_count = 0
+            skipped_count = 0
 
-        existing_assets = {item.asset_id: item for item in self.list_assets()}
-        personnel_cache = self._get_personnel_cache()
-        active_assignments_by_asset = {
-            item.asset_id: item for item in self._list_assignments_raw(active_only=True)
-        }
-        assignment_sync_rows: dict[str, tuple[str, str, datetime]] = {}
-        assignment_clear_rows: set[str] = set()
+            existing_assets = {item.asset_id: item for item in self.list_assets()}
+            personnel_cache = self._get_personnel_cache()
+            active_assignments_by_asset = {
+                item.asset_id: item for item in self._list_assignments_raw(active_only=True)
+            }
+            assignment_sync_rows: dict[str, tuple[str, str, datetime]] = {}
+            assignment_clear_rows: set[str] = set()
 
-        location_override_count = 0
-        location_examples: list[str] = []
+            location_override_count = 0
+            location_examples: list[str] = []
 
-        with self._transaction() as conn:
-            for index, raw_row in frame.iterrows():
-                row = raw_row.to_dict()
-                asset_id = clean_optional(row.get("demirbas_id"))
-                name = self._resolve_asset_name(row)
+            with self._transaction() as conn:
+                for index, raw_row in frame.iterrows():
+                    row = raw_row.to_dict()
+                    asset_id = clean_optional(row.get("demirbas_id"))
+                    name = self._resolve_asset_name(row)
 
-                if not asset_id or not name:
-                    skipped_count += 1
-                    warnings.append(f"Satir {index + 2}: Demirbas ID veya urun adi uretilemedi, kayit atlandi.")
-                    continue
+                    if not asset_id or not name:
+                        skipped_count += 1
+                        warnings.append(f"Satir {index + 2}: Demirbas ID veya urun adi uretilemedi, kayit atlandi.")
+                        continue
 
-                location = clean_optional(row.get("lokasyon")) or "Genel Merkez"
-                if normalize_text(location) not in {"genel_merkez", "merkez", "genel_merkez_lokasyon"}:
-                    location_override_count += 1
-                    if len(location_examples) < 3 and location not in location_examples:
-                        location_examples.append(location)
+                    location = clean_optional(row.get("lokasyon")) or "Genel Merkez"
+                    if normalize_text(location) not in {"genel_merkez", "merkez", "genel_merkez_lokasyon"}:
+                        location_override_count += 1
+                        if len(location_examples) < 3 and location not in location_examples:
+                            location_examples.append(location)
 
-                added_at = (
-                    parse_datetime(row.get("eklenme_tarihi"))
-                    or parse_datetime(row.get("satin_alma_tarihi"))
-                    or now_utc()
-                )
-                category = clean_optional(row.get("kategori")) or clean_optional(row.get("kategori_agaci"))
-                zimmet_name = clean_assignment_name(row.get("zimmet"))
-
-                existing_asset = existing_assets.get(asset_id)
-                existing_assignment = active_assignments_by_asset.get(asset_id)
-
-                if existing_asset:
-                    conn.execute(
-                        """
-                        UPDATE assets
-                        SET name = ?, serial_number = ?, category = ?, brand_model = ?, status = ?, location = ?,
-                            added_at = ?, updated_at = ?, assigned_to = ?, assigned_department = ?, assignment_id = ?
-                        WHERE id = ? OR asset_id = ?
-                        """,
-                        (
-                            name,
-                            clean_optional(row.get("seri_no")),
-                            category,
-                            self._compose_brand_model(row),
-                            sanitize_asset_status(clean_optional(row.get("durum"))),
-                            "Genel Merkez",
-                            to_db_datetime(added_at),
-                            to_db_datetime(now_utc()),
-                            zimmet_name,
-                            existing_assignment.department if (zimmet_name and existing_assignment) else None,
-                            existing_assignment.id if (zimmet_name and existing_assignment) else None,
-                            existing_asset.id,
-                            existing_asset.asset_id,
-                        ),
+                    added_at = (
+                        parse_datetime(row.get("eklenme_tarihi"))
+                        or parse_datetime(row.get("satin_alma_tarihi"))
+                        or now_utc()
                     )
-                    updated_count += 1
+                    category = clean_optional(row.get("kategori")) or clean_optional(row.get("kategori_agaci"))
+                    zimmet_name = clean_assignment_name(row.get("zimmet"))
+
+                    existing_asset = existing_assets.get(asset_id)
+                    existing_assignment = active_assignments_by_asset.get(asset_id)
+
+                    if existing_asset:
+                        conn.execute(
+                            """
+                            UPDATE assets
+                            SET name = ?, serial_number = ?, category = ?, brand_model = ?, status = ?, location = ?,
+                                added_at = ?, updated_at = ?, assigned_to = ?, assigned_department = ?, assignment_id = ?
+                            WHERE id = ? OR asset_id = ?
+                            """,
+                            (
+                                name,
+                                clean_optional(row.get("seri_no")),
+                                category,
+                                self._compose_brand_model(row),
+                                sanitize_asset_status(clean_optional(row.get("durum"))),
+                                "Genel Merkez",
+                                to_db_datetime(added_at),
+                                to_db_datetime(now_utc()),
+                                zimmet_name,
+                                existing_assignment.department if (zimmet_name and existing_assignment) else None,
+                                existing_assignment.id if (zimmet_name and existing_assignment) else None,
+                                existing_asset.id,
+                                existing_asset.asset_id,
+                            ),
+                        )
+                        updated_count += 1
+                    else:
+                        conn.execute(
+                            """
+                            INSERT INTO assets (
+                                id, asset_id, name, serial_number, category, brand_model, status, location,
+                                added_at, created_by, updated_at, assigned_to, assigned_department, assignment_id
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                asset_id,
+                                asset_id,
+                                name,
+                                clean_optional(row.get("seri_no")),
+                                category,
+                                self._compose_brand_model(row),
+                                sanitize_asset_status(clean_optional(row.get("durum"))),
+                                "Genel Merkez",
+                                to_db_datetime(added_at),
+                                user_email,
+                                to_db_datetime(now_utc()),
+                                zimmet_name,
+                                existing_assignment.department if (zimmet_name and existing_assignment) else None,
+                                existing_assignment.id if (zimmet_name and existing_assignment) else None,
+                            ),
+                        )
+                        imported_count += 1
+
+                    if zimmet_name:
+                        assignment_sync_rows[asset_id] = (name, zimmet_name, added_at)
+                        assignment_clear_rows.discard(asset_id)
+                    elif existing_assignment or (existing_asset and (existing_asset.assignment_id or existing_asset.assigned_to)):
+                        assignment_clear_rows.add(asset_id)
+                        assignment_sync_rows.pop(asset_id, None)
+
+            for asset_id, (asset_name, zimmet_name, assigned_at) in assignment_sync_rows.items():
+                self._sync_import_assignment(
+                    asset_id=asset_id,
+                    asset_name=asset_name,
+                    asset_code=asset_id,
+                    personnel_name=zimmet_name,
+                    assigned_at=assigned_at,
+                    user_email=user_email,
+                    personnel_cache=personnel_cache,
+                    active_assignments_by_asset=active_assignments_by_asset,
+                )
+            for asset_id in assignment_clear_rows:
+                self._clear_import_assignment(
+                    asset_id=asset_id,
+                    user_email=user_email,
+                    active_assignments_by_asset=active_assignments_by_asset,
+                )
+
+            self._rebuild_personnel_assignment_counts()
+
+            if location_override_count:
+                if location_examples:
+                    warnings.append(
+                        f"{location_override_count} satirda lokasyon kurali nedeniyle 'Genel Merkez' uygulandi. "
+                        f"Ornek konumlar: {', '.join(location_examples)}"
+                    )
                 else:
-                    conn.execute(
-                        """
-                        INSERT INTO assets (
-                            id, asset_id, name, serial_number, category, brand_model, status, location,
-                            added_at, created_by, updated_at, assigned_to, assigned_department, assignment_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """,
-                        (
-                            asset_id,
-                            asset_id,
-                            name,
-                            clean_optional(row.get("seri_no")),
-                            category,
-                            self._compose_brand_model(row),
-                            sanitize_asset_status(clean_optional(row.get("durum"))),
-                            "Genel Merkez",
-                            to_db_datetime(added_at),
-                            user_email,
-                            to_db_datetime(now_utc()),
-                            zimmet_name,
-                            existing_assignment.department if (zimmet_name and existing_assignment) else None,
-                            existing_assignment.id if (zimmet_name and existing_assignment) else None,
-                        ),
-                    )
-                    imported_count += 1
+                    warnings.append(f"{location_override_count} satirda lokasyon kurali nedeniyle 'Genel Merkez' uygulandi.")
 
-                if zimmet_name:
-                    assignment_sync_rows[asset_id] = (name, zimmet_name, added_at)
-                    assignment_clear_rows.discard(asset_id)
-                elif existing_assignment or (existing_asset and (existing_asset.assignment_id or existing_asset.assigned_to)):
-                    assignment_clear_rows.add(asset_id)
-                    assignment_sync_rows.pop(asset_id, None)
-
-        for asset_id, (asset_name, zimmet_name, assigned_at) in assignment_sync_rows.items():
-            self._sync_import_assignment(
-                asset_id=asset_id,
-                asset_name=asset_name,
-                asset_code=asset_id,
-                personnel_name=zimmet_name,
-                assigned_at=assigned_at,
-                user_email=user_email,
-                personnel_cache=personnel_cache,
-                active_assignments_by_asset=active_assignments_by_asset,
+            self.add_log(
+                user_email,
+                "excel_import",
+                f"Excel import tamamlandi. Yeni: {imported_count}, Guncellenen: {updated_count}, Atlanan: {skipped_count}.",
             )
-        for asset_id in assignment_clear_rows:
-            self._clear_import_assignment(
-                asset_id=asset_id,
-                user_email=user_email,
-                active_assignments_by_asset=active_assignments_by_asset,
+            return ImportResult(
+                imported_count=imported_count,
+                updated_count=updated_count,
+                skipped_count=skipped_count,
+                warnings=warnings[:30],
             )
-
-        self._rebuild_personnel_assignment_counts()
-
-        if location_override_count:
-            if location_examples:
-                warnings.append(
-                    f"{location_override_count} satirda lokasyon kurali nedeniyle 'Genel Merkez' uygulandi. "
-                    f"Ornek konumlar: {', '.join(location_examples)}"
-                )
-            else:
-                warnings.append(f"{location_override_count} satirda lokasyon kurali nedeniyle 'Genel Merkez' uygulandi.")
-
-        self.add_log(
-            user_email,
-            "excel_import",
-            f"Excel import tamamlandi. Yeni: {imported_count}, Guncellenen: {updated_count}, Atlanan: {skipped_count}.",
-        )
-        return ImportResult(
-            imported_count=imported_count,
-            updated_count=updated_count,
-            skipped_count=skipped_count,
-            warnings=warnings[:30],
-        )
+        finally:
+            self._end_bulk_write()
 
     def list_maintenance(self) -> list[MaintenanceRecord]:
         rows = self._query_all("SELECT * FROM maintenance ORDER BY date DESC")
