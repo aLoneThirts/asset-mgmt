@@ -4,11 +4,28 @@ import { useNavigate, useParams } from "react-router-dom";
 import { Printer } from "lucide-react";
 
 import medicanaLogo from "@/assets/brand/medicana-logo.svg";
+import { useAuth } from "@/context/AuthContext";
 import { getAssignmentFormDocument } from "@/lib/firestore";
+
+function buildDisplayName(displayName?: string | null, email?: string | null) {
+  const cleanedDisplayName = (displayName || "").trim();
+  if (cleanedDisplayName) return cleanedDisplayName;
+
+  const emailPrefix = (email || "").split("@")[0]?.trim();
+  if (!emailPrefix) return "Sistem Kullanicisi";
+
+  return emailPrefix
+    .replace(/[._-]+/g, " ")
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
 
 export function AssignmentFormPrintPage() {
   const { assignmentId = "" } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["document", "assignment-form", assignmentId],
@@ -58,8 +75,8 @@ export function AssignmentFormPrintPage() {
 
   const assignedDate = new Date(data.assigned_at);
   const assignedDateText = Number.isNaN(assignedDate.getTime()) ? "-" : assignedDate.toLocaleDateString("tr-TR");
-  const assignedDateTimeText = Number.isNaN(assignedDate.getTime()) ? "-" : assignedDate.toLocaleString("tr-TR");
   const formNote = (data.note || "").trim() || "Excel import zimmet teslim formu";
+  const currentUserName = buildDisplayName(user?.displayName, user?.email);
 
   return (
     <div className="min-h-screen bg-slate-100 p-6 print:bg-white print:p-0">
@@ -165,13 +182,12 @@ export function AssignmentFormPrintPage() {
           <div className="rounded-lg border border-slate-300 p-4">
             <p className="font-semibold text-slate-700">TESLIM EDEN</p>
             <p className="mt-1 text-slate-600">Bilgi Sistemleri</p>
-            <p className="mt-2 text-slate-600">Ad Soyad: {data.assigned_by}</p>
+            <p className="mt-2 text-slate-600">Ad Soyad: {currentUserName}</p>
             <p className="mt-6 border-t border-dashed border-slate-300 pt-2 text-xs text-slate-500">Imza</p>
           </div>
           <div className="rounded-lg border border-slate-300 p-4">
             <p className="font-semibold text-slate-700">TESLIM ALAN</p>
             <p className="mt-2 text-slate-600">Ad Soyad: {data.personnel_name}</p>
-            <p className="mt-1 text-slate-600">Tarih: {assignedDateTimeText}</p>
             <p className="mt-6 border-t border-dashed border-slate-300 pt-2 text-xs text-slate-500">Imza</p>
           </div>
         </footer>
