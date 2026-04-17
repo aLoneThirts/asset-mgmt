@@ -73,10 +73,6 @@ export function ExitReportPrintPage() {
     );
   }
 
-  const meetingDate = new Date(data.meeting_date);
-  const meetingDateText = Number.isNaN(meetingDate.getTime()) ? "-" : meetingDate.toLocaleDateString("tr-TR");
-  const createdAt = new Date(data.created_at);
-  const createdAtText = Number.isNaN(createdAt.getTime()) ? "-" : createdAt.toLocaleString("tr-TR");
   const receiverName = buildDisplayName(user?.displayName, user?.email);
   const receiverUnit = "BILGI SISTEMLERI";
 
@@ -119,14 +115,7 @@ export function ExitReportPrintPage() {
 
       <article className="a4-sheet mx-auto w-full max-w-[210mm] border border-slate-300 bg-white p-8 shadow-sm print:border-0 print:shadow-none">
         <header className="mb-6 border-b border-slate-300 pb-4">
-          <div className="flex items-center justify-between">
-            <img src={medicanaLogo} alt="Medicana" className="h-8 w-auto" />
-            <div className="text-right text-xs text-slate-600">
-              <p>TUTANAK NO: {data.id}</p>
-              <p>OLUSTURMA: {createdAtText}</p>
-              <p>TARIH: {meetingDateText}</p>
-            </div>
-          </div>
+          <img src={medicanaLogo} alt="Medicana" className="h-8 w-auto" />
           <h1 className="mt-4 text-center text-2xl font-bold tracking-wide text-slate-900">TUTANAK</h1>
         </header>
 
