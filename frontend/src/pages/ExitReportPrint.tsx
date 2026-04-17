@@ -35,7 +35,7 @@ export function ExitReportPrintPage() {
 
   useEffect(() => {
     const previousTitle = document.title;
-    document.title = "Isten Cikis Tutanagi";
+    document.title = "";
     return () => {
       document.title = previousTitle;
     };
@@ -81,7 +81,7 @@ export function ExitReportPrintPage() {
       <style>{`
         @page {
           size: A4;
-          margin: 10mm;
+          margin: 0;
         }
         @media print {
           .no-print {
