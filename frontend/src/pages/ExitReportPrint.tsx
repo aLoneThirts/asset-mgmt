@@ -34,6 +34,14 @@ export function ExitReportPrintPage() {
   });
 
   useEffect(() => {
+    const previousTitle = document.title;
+    document.title = "Isten Cikis Tutanagi";
+    return () => {
+      document.title = previousTitle;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!data) return;
     const timer = window.setTimeout(() => {
       window.print();

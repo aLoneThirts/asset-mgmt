@@ -539,7 +539,6 @@ function ExitReportModal({
         note,
         meeting_date: meetingDate ? new Date(`${meetingDate}T09:00:00`).toISOString() : undefined,
       });
-      toast.success("Isten cikis tutanagi olusturuldu.");
       onSaved(report.id);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Tutanak olusturulamadi.");

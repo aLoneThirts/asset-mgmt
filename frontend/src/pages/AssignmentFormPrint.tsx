@@ -17,6 +17,14 @@ export function AssignmentFormPrintPage() {
   });
 
   useEffect(() => {
+    const previousTitle = document.title;
+    document.title = "Zimmet Teslim Formu";
+    return () => {
+      document.title = previousTitle;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!data) return;
     const timer = window.setTimeout(() => {
       window.print();
@@ -51,6 +59,7 @@ export function AssignmentFormPrintPage() {
   const assignedDate = new Date(data.assigned_at);
   const assignedDateText = Number.isNaN(assignedDate.getTime()) ? "-" : assignedDate.toLocaleDateString("tr-TR");
   const assignedDateTimeText = Number.isNaN(assignedDate.getTime()) ? "-" : assignedDate.toLocaleString("tr-TR");
+  const formNote = (data.note || "").trim() || "Excel import zimmet teslim formu";
 
   return (
     <div className="min-h-screen bg-slate-100 p-6 print:bg-white print:p-0">
@@ -91,14 +100,7 @@ export function AssignmentFormPrintPage() {
 
       <article className="a4-sheet mx-auto w-full max-w-[210mm] border border-slate-300 bg-white p-8 shadow-sm print:border-0 print:shadow-none">
         <header className="mb-4 border-b border-slate-300 pb-4">
-          <div className="flex items-center justify-between">
-            <img src={medicanaLogo} alt="Medicana" className="h-8 w-auto" />
-            <div className="text-right text-xs text-slate-600">
-              <p>DOKUMAN KODU: MSG.SC.FR.20</p>
-              <p>YAYIN TARIHI: 03.01.2022</p>
-              <p>SAYFA: 1/1</p>
-            </div>
-          </div>
+          <img src={medicanaLogo} alt="Medicana" className="h-8 w-auto" />
           <h1 className="mt-4 text-center text-xl font-bold tracking-wide text-slate-900">ZIMMET TESLIM FORMU</h1>
         </header>
 
@@ -156,7 +158,7 @@ export function AssignmentFormPrintPage() {
             kurallarina uygun sekilde kullanacagimi, gorev degisikligi veya isten ayrilma durumunda demirbasi eksiksiz
             iade edecegimi kabul ve beyan ederim.
           </p>
-          {data.note && <p className="mt-2 font-medium">Not: {data.note}</p>}
+          <p className="mt-2 font-medium">Not: {formNote}</p>
         </section>
 
         <footer className="mt-10 grid grid-cols-2 gap-8 text-sm">
@@ -177,4 +179,3 @@ export function AssignmentFormPrintPage() {
     </div>
   );
 }
-
