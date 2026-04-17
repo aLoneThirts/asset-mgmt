@@ -4,11 +4,28 @@ import { Printer } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import medicanaLogo from "@/assets/brand/medicana-logo.svg";
+import { useAuth } from "@/context/AuthContext";
 import { getExitReport } from "@/lib/firestore";
+
+function buildDisplayName(displayName?: string | null, email?: string | null) {
+  const cleanedDisplayName = (displayName || "").trim();
+  if (cleanedDisplayName) return cleanedDisplayName;
+
+  const emailPrefix = (email || "").split("@")[0]?.trim();
+  if (!emailPrefix) return "Sistem Kullanicisi";
+
+  return emailPrefix
+    .replace(/[._-]+/g, " ")
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
 
 export function ExitReportPrintPage() {
   const { reportId = "" } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["document", "exit-report", reportId],
@@ -52,6 +69,8 @@ export function ExitReportPrintPage() {
   const meetingDateText = Number.isNaN(meetingDate.getTime()) ? "-" : meetingDate.toLocaleDateString("tr-TR");
   const createdAt = new Date(data.created_at);
   const createdAtText = Number.isNaN(createdAt.getTime()) ? "-" : createdAt.toLocaleString("tr-TR");
+  const receiverName = buildDisplayName(user?.displayName, user?.email);
+  const receiverUnit = "BILGI SISTEMLERI";
 
   return (
     <div className="min-h-screen bg-slate-100 p-6 print:bg-white print:p-0">
@@ -174,7 +193,8 @@ export function ExitReportPrintPage() {
         <footer className="mt-10 grid grid-cols-2 gap-8 text-sm">
           <div className="rounded-lg border border-slate-300 p-4">
             <p className="font-semibold text-slate-700">TESLIM ALAN</p>
-            <p className="mt-1 text-slate-600">Insan Kaynaklari</p>
+            <p className="mt-1 text-slate-600">Ad Soyad: {receiverName}</p>
+            <p className="mt-1 text-slate-600">{receiverUnit}</p>
             <p className="mt-6 border-t border-dashed border-slate-300 pt-2 text-xs text-slate-500">Ad Soyad / Imza</p>
           </div>
           <div className="rounded-lg border border-slate-300 p-4">
