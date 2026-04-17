@@ -49,7 +49,7 @@ export function LoginPage() {
 
           <div className="relative z-10">
             <img src={medicanaLogo} alt="Medicana Saglik Grubu" className="h-10 w-auto brightness-0 invert" />
-            <p className="mt-5 text-xl font-bold text-white">Envanter Takip</p>
+            <p className="mt-5 text-xl font-bold text-white">Medicana Vercel App</p>
             <p className="mt-1 text-sm text-teal-200">Medicana icin kurumsal demirbas ve envanter yonetimi</p>
           </div>
 
@@ -96,7 +96,7 @@ export function LoginPage() {
               <div className="mt-4 inline-flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
                 <img src={medicanaLogo} alt="Medicana Saglik Grubu" className="h-6 w-auto" />
                 <div>
-                  <p className="text-sm font-semibold text-slate-900">Envanter Takip</p>
+                  <p className="text-sm font-semibold text-slate-900">Medicana Vercel App</p>
                   <p className="text-xs text-slate-500">Medicana kurumsal yonetim paneli</p>
                 </div>
               </div>

@@ -27,6 +27,7 @@ export default function App() {
           <Suspense fallback={<PageLoader />}>
             <Routes>
               <Route path="/login" element={<LoginPage />} />
+              <Route path="/logn" element={<Navigate to="/login" replace />} />
 
               <Route element={<ProtectedRoute />}>
                 <Route element={<AppLayout />}>

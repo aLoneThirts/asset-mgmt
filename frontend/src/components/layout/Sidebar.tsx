@@ -37,7 +37,7 @@ export function Sidebar() {
     <aside className="flex min-h-screen w-72 flex-col border-r border-slate-800 bg-slate-950">
       <div className="border-b border-slate-800 px-6 py-5">
         <img src={medicanaLogo} alt="Medicana Saglik Grubu" className="h-8 w-auto brightness-0 invert" />
-        <p className="mt-4 text-lg font-bold text-white">Envanter Takip</p>
+        <p className="mt-4 text-lg font-bold text-white">Medicana Vercel App</p>
         <p className="mt-1 text-xs text-slate-400">Medicana icin kurumsal demirbas ve envanter merkezi</p>
       </div>
 
