@@ -141,6 +141,8 @@ def create_asset(
         return service.create_asset(payload, user.email)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.put("/assets/{asset_id}", response_model=Asset)
@@ -154,6 +156,8 @@ def update_asset(
         return service.update_asset(asset_id, payload, user.email)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.delete("/assets/{asset_id}")
@@ -168,6 +172,8 @@ def delete_asset(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"ok": True}
 
 
@@ -210,6 +216,8 @@ def create_maintenance(
         return service.create_maintenance(payload, user.email)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.patch("/maintenance/{maintenance_id}", response_model=MaintenanceRecord)
@@ -223,6 +231,8 @@ def update_maintenance(
         return service.update_maintenance(maintenance_id, payload, user.email)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/stock", response_model=list[StockItem])
@@ -242,7 +252,10 @@ def create_stock(
     user: AuthUser = Depends(get_current_user),
     service: FirestoreService = Depends(get_service),
 ) -> StockItem:
-    return service.create_stock(payload, user.email)
+    try:
+        return service.create_stock(payload, user.email)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.put("/stock/{stock_id}", response_model=StockItem)
@@ -256,6 +269,8 @@ def update_stock(
         return service.update_stock(stock_id, payload, user.email)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.delete("/stock/{stock_id}")
@@ -268,6 +283,8 @@ def delete_stock(
         service.delete_stock(stock_id, user.email)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"ok": True}
 
 
@@ -288,7 +305,10 @@ def create_personnel(
     user: AuthUser = Depends(get_current_user),
     service: FirestoreService = Depends(get_service),
 ) -> Personnel:
-    return service.create_personnel(payload, user.email)
+    try:
+        return service.create_personnel(payload, user.email)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.put("/personnel/{personnel_id}", response_model=Personnel)
@@ -302,6 +322,8 @@ def update_personnel(
         return service.update_personnel(personnel_id, payload, user.email)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.delete("/personnel/{personnel_id}")
@@ -316,6 +338,8 @@ def delete_personnel(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {"ok": True}
 
 
@@ -343,6 +367,8 @@ def create_assignment(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.patch("/assignments/{assignment_id}/return", response_model=AssignmentRecord)
@@ -358,6 +384,8 @@ def return_assignment(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/reports/summary", response_model=ReportSummary)

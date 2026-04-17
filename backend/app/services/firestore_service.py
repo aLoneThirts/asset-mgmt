@@ -324,6 +324,10 @@ class FirestoreService:
         if not self._cloud_sync_enabled:
             return
 
+        if self._cloud_dirty and not force:
+            # Never overwrite local state while there are pending unsynced writes.
+            return
+
         now = now_utc()
         if (
             not force
@@ -358,6 +362,18 @@ class FirestoreService:
                 except Exception:
                     pass
 
+    def _is_cloud_generation_conflict(self, exc: Exception) -> bool:
+        message = str(exc).lower()
+        class_name = exc.__class__.__name__.lower()
+        code = str(getattr(exc, "code", "")).strip()
+        return (
+            "precondition" in class_name
+            or "precondition" in message
+            or "conditionnotmet" in message
+            or "if_generation_match" in message
+            or code == "412"
+        )
+
     def _sync_to_cloud(self) -> None:
         if not self._cloud_sync_enabled:
             return
@@ -382,17 +398,17 @@ class FirestoreService:
             blob.reload()
             self._cloud_generation = int(blob.generation) if blob.generation else self._cloud_generation
             self._cloud_dirty = False
-        except Exception:
-            try:
-                blob.upload_from_filename(
-                    self.database_path,
-                    content_type="application/x-sqlite3",
-                )
-                blob.reload()
-                self._cloud_generation = int(blob.generation) if blob.generation else self._cloud_generation
-                self._cloud_dirty = False
-            except Exception:
-                pass
+            return
+        except Exception as exc:
+            if self._is_cloud_generation_conflict(exc):
+                self._last_cloud_pull_at = None
+                try:
+                    self._sync_from_cloud(force=True)
+                    self._cloud_dirty = False
+                except Exception:
+                    pass
+                raise RuntimeError("Veri baska bir oturum tarafindan degistirildi. Lutfen islemi tekrar deneyin.") from exc
+            raise RuntimeError("Veri senkronizasyonu basarisiz oldu. Lutfen tekrar deneyin.") from exc
 
     def _begin_bulk_write(self) -> None:
         with self._lock:
@@ -529,7 +545,7 @@ class FirestoreService:
     def _execute(self, query: str, params: tuple[Any, ...] = ()) -> None:
         with self._lock:
             if self._bulk_write_depth == 0:
-                self._sync_from_cloud()
+                self._sync_from_cloud(force=True)
             self.conn.execute(query, params)
             self.conn.commit()
             self._cloud_dirty = True
@@ -541,7 +557,7 @@ class FirestoreService:
         with self._lock:
             try:
                 if self._bulk_write_depth == 0:
-                    self._sync_from_cloud()
+                    self._sync_from_cloud(force=True)
                 self.conn.execute("BEGIN")
                 yield self.conn
                 self.conn.commit()
