@@ -67,7 +67,7 @@ export function LoginPage() {
 
             <div className="grid gap-4 sm:grid-cols-2">
               {[
-                "Firebase Auth ile giris ve kayit",
+                "Guvenli token ile giris ve kayit",
                 "Pandas tabanli Excel import akisi",
                 "Zimmet ve personel takibi",
                 "Dashboard grafik ve rapor exportlari",
@@ -79,7 +79,7 @@ export function LoginPage() {
             </div>
           </div>
 
-          <p className="relative z-10 text-xs text-slate-300">Vercel frontend · FastAPI backend · Firebase Firestore</p>
+          <p className="relative z-10 text-xs text-slate-300">Vercel frontend · FastAPI backend · SQL tabanli veri katmani</p>
         </section>
 
         <section className="flex items-center justify-center p-6">
@@ -181,3 +181,4 @@ export function LoginPage() {
     </div>
   );
 }
+
